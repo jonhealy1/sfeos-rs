@@ -2,7 +2,7 @@
 use crate::dto::CreateOrLinkPayload;
 use crate::links::LinkEngine;
 use crate::store::{
-    ChildNode, NodeKind, Store, CATALOGS_INDEX, COLLECTIONS_INDEX, ITEMS_INDEX, ROOT_CATALOG_ID,
+    NodeKind, Store, CATALOGS_INDEX, COLLECTIONS_INDEX, ITEMS_INDEX, ROOT_CATALOG_ID,
 };
 use axum::{
     extract::{Path, Query, State},

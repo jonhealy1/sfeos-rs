@@ -10,6 +10,7 @@ A STAC API Opensearch server built with Rust
 - [API Routes](#api-routes)
 - [Getting Started (coming from Python?)](#getting-started-coming-from-python)
 - [Sample Data](#sample-data)
+- [TODO](#todo)
 
 ## What is this?
 
@@ -111,3 +112,30 @@ python3 scripts/ingest_sample_data.py        # STAC_API_URL to override :3000
 ```
 
 Then try scoped search: `POST /catalogs/earth-observation/search` returns its 4 satellite items; `POST /catalogs/search` searches the whole registry.
+
+## TODO
+
+This is a prototype — the endpoints exist but several are shallow. Known gaps:
+
+**Search**
+- Only `collections` + `limit` are translated into the OpenSearch query — `bbox`, `datetime`, `intersects`, `ids`, and `sortby` are parsed but ignored
+- No CQL2 / filter extension support
+- No pagination (`limit` exists; `page`/`token`/next-page links don't)
+- `numberMatched`/`numberReturned` reflect the page size, not true totals (`track_total_hits` is off)
+
+**Core STAC routes** (links already point here — currently dead until implemented)
+- `GET/POST /search`, `/collections`, `/collections/{id}`, `/collections/{id}/items` at the root
+- Item links: items return `links: []` (catalog/collection docs already get DAG-derived links)
+- No `/conformance` page or `/queryables` endpoints
+
+**Hierarchy & data**
+- Children/descendants capped at 10k per level — real pagination needed on the DAG itself
+- No optimistic concurrency: concurrent link/unlink on the same node can lost-update (needs `_seq_no`/`_primary_term` or scripted upserts)
+- Reserved IDs: a catalog named `search` collides with the static route — should 400 on create
+- Orphaned docs: a hierarchy node whose document is missing is silently skipped in children listings — needs a consistency check
+
+**Ops**
+- Integration tests write `it-*` fixtures into the same indices as dev data — needs index isolation or cleanup
+- OpenSearch runs single-node with the security plugin disabled — dev only, harden before anything else
+- No auth or per-tenant authorization — catalog scope is organizational only, not a security boundary
+- Mode B link allows linking *any* existing resource id with no existence validation on the parent

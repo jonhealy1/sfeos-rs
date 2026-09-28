@@ -90,6 +90,8 @@ Config via env vars: `OPENSEARCH_URL` (default `http://localhost:9200`), `ENABLE
 
 Other handy commands: `cargo check` (fast type-check, no binary), `cargo test` (unit + integration tests — integration tests need OpenSearch running, and skip automatically if it's not), `cargo add <crate>` (add a dependency).
 
+Or use the **Makefile**, which handles the Docker dependency for you (`make test` / `make test-integration` start OpenSearch and wait for it to be healthy before running tests): `make up`, `make test`, `make test-integration`, `make ingest`, `make reset` (wipes data volumes), `make down`.
+
 ## Sample Data
 
 `sample_data/` contains a demo hierarchy — folder structure mirrors the DAG:

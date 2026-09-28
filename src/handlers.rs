@@ -180,6 +180,68 @@ fn collection_links(state: &AppState, collection_id: &str, scoped_catalog_id: &s
     )
 }
 
+/// Links for a collection read at the global `/collections/{id}` route:
+/// `self` is the canonical URL, `parent` per non-root parent catalog
+/// (landing page when root-level), `related`/`duplicate` expose the
+/// scoped paths unless `hide_alternate_parents`.
+fn global_collection_links(
+    state: &AppState,
+    collection_id: &str,
+    parents: &[String],
+) -> Vec<Link> {
+    let base = &state.base_url;
+    let mut links = vec![
+        link_json(format!("{base}/collections/{collection_id}"), "self"),
+        link_json(base.clone(), "root"),
+    ];
+    let mut real: Vec<&str> = parents
+        .iter()
+        .map(String::as_str)
+        .filter(|p| *p != ROOT_CATALOG_ID)
+        .collect();
+    real.sort_unstable();
+    real.dedup();
+    if real.is_empty() {
+        links.push(link_json(base.clone(), "parent"));
+        return links;
+    }
+    let shown: &[&str] = if state.hide_alternate_parents {
+        &real[..1]
+    } else {
+        &real
+    };
+    for p in shown {
+        links.push(link_json(format!("{base}/catalogs/{p}"), "parent"));
+    }
+    if !state.hide_alternate_parents {
+        for p in &real {
+            let mut related = link_json(format!("{base}/catalogs/{p}"), "related");
+            related.title = Some(format!("Alternate parent: {p}"));
+            links.push(related);
+            links.push(link_json(
+                format!("{base}/catalogs/{p}/collections/{collection_id}"),
+                "duplicate",
+            ));
+        }
+    }
+    links
+}
+
+/// Serialize a collection with global (canonical) links.
+async fn global_collection_doc(
+    state: &AppState,
+    collection_id: &str,
+) -> Result<serde_json::Value, ApiError> {
+    let mut doc = state
+        .store
+        .get_document(COLLECTIONS_INDEX, collection_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(collection_id.to_string()))?;
+    let parents = state.store.get_parents(collection_id).await?;
+    doc["links"] = json!(global_collection_links(state, collection_id, &parents));
+    Ok(doc)
+}
+
 /// Serialize a catalog with its DAG-derived links injected — write
 /// responses mirror what a subsequent GET would return.
 async fn catalog_doc(state: &AppState, catalog: &Catalog) -> Result<serde_json::Value, ApiError> {
@@ -859,6 +921,107 @@ pub async fn unlink_scoped_collection(
         .unlink_and_adopt(&collection_id, &catalog_id)
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// --- Global Collections (core STAC routes) ---
+
+/// GET /collections — every collection in the registry (all descendants
+/// of root; orphans are adopted there automatically).
+pub async fn list_collections(
+    Query(query): Query<ListQuery>,
+    State(state): State<Arc<AppState>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let (limit, offset) = list_window(&query)?;
+    let mut ids: Vec<String> = state
+        .store
+        .get_descendant_collections(ROOT_CATALOG_ID)
+        .await?
+        .into_iter()
+        .collect();
+    ids.sort(); // HashSet order is unstable — sort for deterministic pages
+    let matched = ids.len();
+    let page: Vec<String> = ids
+        .into_iter()
+        .skip(offset as usize)
+        .take(limit as usize)
+        .collect();
+    let parents_map = state.store.get_parents_many(&page).await?;
+    let mut collections = state.store.get_documents(COLLECTIONS_INDEX, &page).await?;
+    for doc in collections.iter_mut() {
+        if let Some(id) = doc["id"].as_str() {
+            let parents = parents_map.get(id).cloned().unwrap_or_default();
+            doc["links"] = json!(global_collection_links(&state, id, &parents));
+        }
+    }
+    let mut links = json!([
+        { "rel": "self", "href": format!("{}/collections", state.base_url) },
+        { "rel": "root", "href": state.base_url },
+        { "rel": "parent", "href": state.base_url }
+    ]);
+    let returned = collections.len();
+    if let Some(next) =
+        list_next_link(&state, "/collections", limit, offset, returned, matched, None)
+    {
+        links.as_array_mut().unwrap().push(next);
+    }
+    Ok(Json(json!({
+        "collections": collections,
+        "numberReturned": returned,
+        "numberMatched": matched,
+        "links": links
+    })))
+}
+
+/// GET /collections/{id} — canonical collection read.
+pub async fn get_collection(
+    Path(collection_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(global_collection_doc(&state, &collection_id).await?))
+}
+
+/// GET /collections/{id}/items — global item listing for a collection.
+pub async fn list_collection_items(
+    Path(collection_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ItemCollection>, ApiError> {
+    if state
+        .store
+        .get_document(COLLECTIONS_INDEX, &collection_id)
+        .await?
+        .is_none()
+    {
+        return Err(ApiError::NotFound(collection_id));
+    }
+    let (items, matched) = state
+        .store
+        .search_items(&[collection_id], &Search::default())
+        .await?;
+    let returned = items.len() as u64;
+    let mut collection =
+        ItemCollection::new(items).map_err(|e| ApiError::Internal(e.to_string()))?;
+    collection.number_matched = Some(matched);
+    collection.number_returned = Some(returned);
+    Ok(Json(collection))
+}
+
+/// GET /collections/{id}/items/{item_id} — global item read.
+pub async fn get_collection_item(
+    Path((collection_id, item_id)): Path<(String, String)>,
+    State(state): State<Arc<AppState>>,
+) -> Result<impl IntoResponse, ApiError> {
+    if state
+        .store
+        .get_document(COLLECTIONS_INDEX, &collection_id)
+        .await?
+        .is_none()
+    {
+        return Err(ApiError::NotFound(collection_id));
+    }
+    match state.store.get_document(ITEMS_INDEX, &item_id).await? {
+        Some(doc) if doc["collection"] == collection_id => Ok(Json(doc)),
+        _ => Err(ApiError::NotFound(item_id)),
+    }
 }
 
 pub async fn disband_catalog(

@@ -30,38 +30,55 @@ When unset, only the read surface is mounted and the landing page `conformsTo` o
 
 ### Read surface — always mounted
 
-| Method | Path | Description |
+| Method | Path | Supports |
 |---|---|---|
 | GET | `/` | Landing page (`conformsTo`, links) |
-| GET | `/catalogs` | List top-level catalogs (`?limit=&token=` paging) |
-| GET | `/catalogs/{catalog_id}` | Fetch a catalog |
-| GET | `/catalogs/{catalog_id}/catalogs` | List sub-catalogs of a catalog |
-| GET | `/catalogs/{catalog_id}/conformance` | Catalog-scoped `conformsTo` classes |
-| GET | `/catalogs/{catalog_id}/children` | List children (`?type=Catalog\|Collection`, `?limit=&token=`) |
-| GET | `/catalogs/{catalog_id}/collections` | List collections in scope (`?limit=&token=`) |
-| GET | `/catalogs/{catalog_id}/collections/{collection_id}` | Fetch a scoped collection |
-| GET | `/catalogs/{catalog_id}/collections/{collection_id}/items` | List items in a scoped collection |
-| GET | `/catalogs/{catalog_id}/collections/{collection_id}/items/{item_id}` | Fetch a scoped item |
-| GET/POST | `/catalogs/search` | Search across the whole catalogs registry (scope = `root`) |
-| GET/POST | `/catalogs/{catalog_id}/search` | Scoped search (`Search` body intersected with descendants) |
+| GET | `/collections` | `?limit=&token=` paging |
+| GET | `/collections/{collection_id}` | Canonical links (`self`, `parent` per parent, `duplicate`) |
+| GET | `/collections/{collection_id}/items` | `numberMatched`/`numberReturned` |
+| GET | `/collections/{collection_id}/items/{item_id}` | — |
+| GET | `/catalogs` | `?limit=&token=` paging (default 10) |
+| GET | `/catalogs/{catalog_id}` | Dynamic links (`parent` per parent, `children`, `data`, `search`) |
+| GET | `/catalogs/{catalog_id}/catalogs` | `?limit=&token=` paging |
+| GET | `/catalogs/{catalog_id}/conformance` | Scoped `conformsTo` classes |
+| GET | `/catalogs/{catalog_id}/children` | `?type=Catalog\|Collection` filter, `?limit=&token=` paging |
+| GET | `/catalogs/{catalog_id}/collections` | `?limit=&token=` paging |
+| GET | `/catalogs/{catalog_id}/collections/{collection_id}` | Contextual `self`/`parent`, alt parents as `related`/`duplicate` |
+| GET | `/catalogs/{catalog_id}/collections/{collection_id}/items` | `numberMatched`/`numberReturned` |
+| GET | `/catalogs/{catalog_id}/collections/{collection_id}/items/{item_id}` | — |
+| GET/POST | `/catalogs/search` | Whole-registry scope. Filters: `collections`, `ids`, `bbox`, `intersects`, `datetime`, `limit`, `offset` → `next`/`prev` links |
+| GET/POST | `/catalogs/{catalog_id}/search` | Same filters, intersected with the catalog's descendant collections |
+
+GET search takes `bbox`, `datetime`, `ids`, `collections`, `limit` as query params; POST takes the full `Search` body (`intersects` included). `sortby`, `fields`, `query`, and CQL2 `filter` are parsed but not yet applied.
 
 ### Transactions — require `ENABLE_TRANSACTIONS_EXTENSIONS`
 
-| Method | Path | Description |
+| Method | Path | Supports |
 |---|---|---|
-| POST | `/catalogs` | Create a root-level catalog |
-| PUT | `/catalogs/{catalog_id}` | Update a catalog |
-| DELETE | `/catalogs/{catalog_id}` | Disband (children adopted by `root`) |
-| POST | `/catalogs/{catalog_id}/catalogs` | Create (Mode A) or link (Mode B `{"id": ...}`) a sub-catalog |
-| DELETE | `/catalogs/{catalog_id}/catalogs/{sub_id}` | Unlink a sub-catalog |
-| POST | `/catalogs/{catalog_id}/collections` | Create (Mode A) or link (Mode B) a collection |
-| PUT | `/catalogs/{catalog_id}/collections/{collection_id}` | Update a collection |
-| DELETE | `/catalogs/{catalog_id}/collections/{collection_id}` | Unlink a collection |
-| POST | `/catalogs/{catalog_id}/collections/{collection_id}/items` | Create an item |
-| PUT | `/catalogs/{catalog_id}/collections/{collection_id}/items/{item_id}` | Update an item |
-| DELETE | `/catalogs/{catalog_id}/collections/{collection_id}/items/{item_id}` | Delete an item |
+| POST | `/catalogs` | Create a root-level catalog; `409` on id collision |
+| PUT | `/catalogs/{catalog_id}` | Update; body `id` must match path |
+| DELETE | `/catalogs/{catalog_id}` | Disband — direct children adopted by `root`, never cascaded |
+| POST | `/catalogs/{catalog_id}/catalogs` | Mode A full-body create (`201`) or Mode B link `{"id": ...}` (`200`); `404` link target missing, `409` repost |
+| DELETE | `/catalogs/{catalog_id}/catalogs/{sub_id}` | Unlink edge only; `404` if not a child |
+| POST | `/catalogs/{catalog_id}/collections` | Mode A create / Mode B link — same codes as sub-catalogs |
+| PUT | `/catalogs/{catalog_id}/collections/{collection_id}` | Update in place — all DAG memberships preserved |
+| DELETE | `/catalogs/{catalog_id}/collections/{collection_id}` | Unlink edge only; `404` if not a child |
+| POST | `/catalogs/{catalog_id}/collections/{collection_id}/items` | Create; `400` if body `collection` contradicts path |
+| PUT | `/catalogs/{catalog_id}/collections/{collection_id}/items/{item_id}` | Update; same collection check |
+| DELETE | `/catalogs/{catalog_id}/collections/{collection_id}/items/{item_id}` | Delete; `404` unless in this collection |
 
 Scoped reads 404 when the target collection isn't inside the catalog's DAG. Item payloads whose `collection` field contradicts the path get a 400.
+
+Status codes: `201` create (Mode A), `200` link (Mode B `{"id": ...}`) / update, `204` delete/unlink, `400` bad request (`limit=0`, id mismatch, invalid search), `404` missing resource or edge, `409` id collision / full-body repost.
+
+### Planned — currently 404/405
+
+| Method | Path | Status |
+|---|---|---|
+| GET/POST | `/search` | 404 — links already point here |
+| GET | `/conformance` | 404 — catalog-scoped variant exists |
+| GET | `/collections/{id}/queryables` | 404 |
+| POST | `/catalogs/{id}/bulk` | 404 — bulk transactions extension |
 
 ## Getting Started (coming from Python?)
 

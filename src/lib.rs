@@ -18,6 +18,17 @@ pub fn build_app(state: Arc<AppState>) -> Router {
     let mut app = Router::new()
         // --- Global Landing Page ---
         .route("/", get(root_landing_page))
+        // --- Core STAC collections routes (global namespace) ---
+        .route("/collections", get(list_collections))
+        .route("/collections/{collection_id}", get(get_collection))
+        .route(
+            "/collections/{collection_id}/items",
+            get(list_collection_items),
+        )
+        .route(
+            "/collections/{collection_id}/items/{item_id}",
+            get(get_collection_item),
+        )
         // --- Registry & Management Plane ---
         .route("/catalogs", get(list_catalogs))
         .route("/catalogs/{catalog_id}", get(get_catalog))

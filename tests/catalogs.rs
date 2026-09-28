@@ -1824,13 +1824,7 @@ async fn test_hide_alternate_parents_suppresses_related_links_on_global_collecti
     post_catalog(&app, &cat).await;
     post_collection(&app, &cat, collection(&col)).await;
     post_collection(&app, ROOT_CATALOG_ID, json!({"id": col})).await;
-    let (_, body) = call(
-        &app,
-        "GET",
-        &format!("/catalogs/{ROOT_CATALOG_ID}/collections/{col}"),
-        None,
-    )
-    .await;
+    let (_, body) = call(&app, "GET", &format!("/collections/{col}"), None).await;
     assert!(links_by_rel(&body, "related").is_empty());
     assert!(links_by_rel(&body, "duplicate").is_empty());
 }

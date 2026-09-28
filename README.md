@@ -120,10 +120,10 @@ Then try scoped search: `POST /catalogs/earth-observation/search` returns its 4 
 This is a prototype — the endpoints exist but several are shallow. Known gaps:
 
 **Search**
-- Only `collections` + `limit` are translated into the OpenSearch query — `bbox`, `datetime`, `intersects`, `ids`, and `sortby` are parsed but ignored
+- `collections`, `ids`, `bbox`, `intersects`, `datetime`, and `limit` are translated to OpenSearch queries — `sortby`, `fields`, and `query` are parsed but ignored
+- `datetime` bounds must be full RFC3339 datetimes — date-only inputs (`2023-06-01`) are rejected at validation
 - No CQL2 / filter extension support
-- No pagination (`limit` exists; `page`/`token`/next-page links don't)
-- `numberMatched`/`numberReturned` reflect the page size, not true totals (`track_total_hits` is off)
+- No pagination (`limit` caps page size at 10k; `page`/`token`/next-page links don't exist)
 
 **Core STAC routes** (links already point here — currently dead until implemented)
 - `GET/POST /search`, `/collections`, `/collections/{id}`, `/collections/{id}/items` at the root

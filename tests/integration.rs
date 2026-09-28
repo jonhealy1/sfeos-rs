@@ -329,8 +329,10 @@ async fn test_search_bbox_datetime_intersects_ids() {
     let (_, body) = search(json!({"bbox": [-180.0, -90.0, 180.0, 90.0]})).await;
     assert_eq!(body["numberMatched"], 2);
 
-    // datetime interval and instant
-    let (_, body) = search(json!({"datetime": "2023-06-01/2023-07-01"})).await;
+    // datetime interval and instant (full RFC3339 — the crate rejects
+    // date-only bounds in valid())
+    let (_, body) =
+        search(json!({"datetime": "2023-06-01T00:00:00Z/2023-07-01T00:00:00Z"})).await;
     assert_eq!(body["numberMatched"], 1);
     assert_eq!(body["features"][0]["id"], inside);
     let (_, body) = search(json!({"datetime": "2023-08-01T00:00:00Z"})).await;

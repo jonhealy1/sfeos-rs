@@ -248,16 +248,12 @@ async fn run_scoped_search(
     scope_id: &str,
     mut search: Search,
 ) -> Result<Json<ItemCollection>, ApiError> {
-    // Spec-level validation: bbox and intersects are mutually exclusive,
-    // and an inverted bbox is invalid.
+    // Spec-level validation: bbox/intersects mutual exclusion, bbox
+    // ordering, and datetime parsing (full RFC3339 — date-only bounds
+    // are rejected by the crate).
     search = search
         .valid()
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    if let Some(bbox) = &search.items.bbox {
-        if !bbox.is_valid() {
-            return Err(ApiError::BadRequest("invalid bbox".into()));
-        }
-    }
 
     let empty = || {
         ItemCollection::new(Vec::new()).map_err(|e| ApiError::Internal(e.to_string()))

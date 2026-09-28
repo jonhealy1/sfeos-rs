@@ -123,7 +123,7 @@ This is a prototype — the endpoints exist but several are shallow. Known gaps:
 - `collections`, `ids`, `bbox`, `intersects`, `datetime`, and `limit` are translated to OpenSearch queries — `sortby`, `fields`, and `query` are parsed but ignored
 - `datetime` bounds must be full RFC3339 datetimes — date-only inputs (`2023-06-01`) are rejected at validation
 - No CQL2 / filter extension support
-- No pagination (`limit` caps page size at 10k; `page`/`token`/next-page links don't exist)
+- Offset pagination exists: `{"offset": n}` in the search body + `next`/`prev` links (`method: POST`, `body`) in responses. Deep paging (>10k) needs `search_after`/cursor — not implemented. `GET .../items` doesn't paginate yet
 
 **Core STAC routes** (links already point here — currently dead until implemented)
 - `GET/POST /search`, `/collections`, `/collections/{id}`, `/collections/{id}/items` at the root

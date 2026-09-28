@@ -360,6 +360,68 @@ async fn test_search_bbox_datetime_intersects_ids() {
 }
 
 #[tokio::test]
+async fn test_search_pagination() {
+    let Some(state) = test_state(true).await else {
+        eprintln!("skipping: OpenSearch unreachable");
+        return;
+    };
+    let app = build_app(state);
+    let cat = uniq("it-page");
+    let col = uniq("it-page-col");
+
+    call(&app, "POST", "/catalogs", Some(catalog(&cat))).await;
+    call(
+        &app,
+        "POST",
+        &format!("/catalogs/{cat}/collections"),
+        Some(collection(&col)),
+    )
+    .await;
+    for i in 0..3 {
+        let (s, _) = call(
+            &app,
+            "POST",
+            &format!("/catalogs/{cat}/collections/{col}/items"),
+            Some(item(&uniq(&format!("it-page-item-{i}")))),
+        )
+        .await;
+        assert_eq!(s, StatusCode::CREATED);
+    }
+
+    let search = |body: Value| {
+        let app = app.clone();
+        let cat = cat.clone();
+        async move {
+            call(&app, "POST", &format!("/catalogs/{cat}/search"), Some(body)).await
+        }
+    };
+
+    // Page 1: 2 of 3, next link carries offset=2 in its POST body
+    let (s, body) = search(json!({"limit": 2})).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(body["numberMatched"], 3);
+    assert_eq!(body["numberReturned"], 2);
+    let next = body["links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["rel"] == "next")
+        .expect("missing next link");
+    assert_eq!(next["method"], "POST");
+    assert_eq!(next["body"]["offset"], 2);
+    assert_eq!(next["body"]["limit"], 2); // original search preserved
+
+    // Page 2 via the next link's body: 1 item, prev link back to offset 0
+    let (s, body) = search(next["body"].clone()).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(body["numberMatched"], 3);
+    assert_eq!(body["numberReturned"], 1);
+    let links = body["links"].as_array().unwrap();
+    assert!(links.iter().any(|l| l["rel"] == "prev"));
+    assert!(!links.iter().any(|l| l["rel"] == "next"));
+}
+
+#[tokio::test]
 async fn test_item_collection_mismatch_is_400() {
     let Some(state) = test_state(true).await else {
         eprintln!("skipping: OpenSearch unreachable");

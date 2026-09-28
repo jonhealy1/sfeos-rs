@@ -24,9 +24,9 @@ pub const ITEMS_INDEX: &str = "stac-items";
 const MAX_DESCENDANT_DEPTH: usize = 25;
 /// Cap on children fetched per query (proper pagination is future work).
 const MAX_CHILDREN: usize = 10_000;
-/// Default / max page size for item search (real pagination is TODO).
-const DEFAULT_SEARCH_LIMIT: u64 = 100;
-const MAX_SEARCH_LIMIT: u64 = 10_000;
+/// Default / max page size for item search.
+pub const DEFAULT_SEARCH_LIMIT: u64 = 100;
+pub const MAX_SEARCH_LIMIT: u64 = 10_000;
 
 /// STAC node type tracked in the hierarchy DAG.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -425,8 +425,9 @@ impl Store {
     /// Item search scoped to a set of collections.
     /// Returns (item docs, total_matched) — sources pass through verbatim
     /// since ItemCollection supports the fields extension.
-    /// Translates collections/ids/bbox/intersects/datetime/limit; sortby,
-    /// fields and pagination remain future work.
+    /// Translates collections/ids/bbox/intersects/datetime/limit plus
+    /// `offset` (unmodeled, arrives via `additional_fields`); sortby,
+    /// fields and cursor/deep pagination remain future work.
     pub async fn search_items(
         &self,
         collections: &[String],
@@ -437,6 +438,7 @@ impl Store {
             .limit
             .unwrap_or(DEFAULT_SEARCH_LIMIT)
             .min(MAX_SEARCH_LIMIT);
+        let offset = search_offset(search);
 
         let mut filter = vec![json!({"terms": {"collection": collections}})];
         if !search.ids.is_empty() {
@@ -462,6 +464,7 @@ impl Store {
             .search(SearchParts::Index(&[ITEMS_INDEX]))
             .body(json!({
                 "size": limit,
+                "from": offset,
                 "track_total_hits": true,
                 "query": {"bool": {"filter": filter}}
             }))
@@ -502,6 +505,17 @@ impl Store {
             .await?;
         Ok(())
     }
+}
+
+/// Page offset — `offset` isn't a modeled `Search` field, it arrives via
+/// `additional_fields` (same trick stac-server's duckdb backend uses).
+pub fn search_offset(search: &Search) -> u64 {
+    search
+        .items
+        .additional_fields
+        .get("offset")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
 }
 
 /// STAC `bbox` -> geo_shape envelope query (intersects semantics).

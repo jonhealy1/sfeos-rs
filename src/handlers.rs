@@ -2,7 +2,8 @@
 use crate::dto::CreateOrLinkPayload;
 use crate::links::LinkEngine;
 use crate::store::{
-    NodeKind, Store, CATALOGS_INDEX, COLLECTIONS_INDEX, ITEMS_INDEX, ROOT_CATALOG_ID,
+    search_offset, NodeKind, Store, CATALOGS_INDEX, COLLECTIONS_INDEX, DEFAULT_SEARCH_LIMIT,
+    ITEMS_INDEX, MAX_SEARCH_LIMIT, ROOT_CATALOG_ID,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -284,7 +285,45 @@ async fn run_scoped_search(
         ItemCollection::new(items).map_err(|e| ApiError::Internal(e.to_string()))?;
     collection.number_matched = Some(matched);
     collection.number_returned = Some(returned);
+
+    // 4. Offset pagination links (STAC pagination: method+body on the link).
+    let limit = search
+        .items
+        .limit
+        .unwrap_or(DEFAULT_SEARCH_LIMIT)
+        .min(MAX_SEARCH_LIMIT);
+    let offset = search_offset(&search);
+    let href = if scope_id == ROOT_CATALOG_ID {
+        format!("{}/catalogs/search", state.base_url)
+    } else {
+        format!("{}/catalogs/{scope_id}/search", state.base_url)
+    };
+    if offset + returned < matched {
+        collection
+            .links
+            .push(page_link("next", &href, &search, offset + limit));
+    }
+    if offset > 0 {
+        collection.links.push(page_link(
+            "prev",
+            &href,
+            &search,
+            offset.saturating_sub(limit),
+        ));
+    }
     Ok(Json(collection))
+}
+
+/// A STAC pagination link: rel + href + `method: POST` + the original
+/// search body with an updated `offset`.
+fn page_link(rel: &str, href: &str, search: &Search, offset: u64) -> Link {
+    let mut body = serde_json::to_value(search).unwrap_or_default();
+    body["offset"] = json!(offset);
+    let mut link = Link::new(href, rel);
+    link.method = Some("POST".to_string());
+    link.r#type = Some("application/geo+json".to_string());
+    link.body = body.as_object().cloned();
+    link
 }
 
 pub async fn scoped_search_post(

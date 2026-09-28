@@ -4,11 +4,13 @@ use opensearch::{
         transport::{SingleNodeConnectionPool, TransportBuilder},
         StatusCode, Url,
     },
-    indices::{IndicesCreateParts, IndicesExistsParts},
+    indices::{IndicesCreateParts, IndicesExistsParts, IndicesPutMappingParts},
     DeleteParts, GetParts, IndexParts, MgetParts, OpenSearch, SearchParts,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
+use stac::Bbox;
+use stac_api::Search;
 use std::collections::{HashMap, HashSet};
 
 pub const ROOT_CATALOG_ID: &str = "root";
@@ -22,6 +24,9 @@ pub const ITEMS_INDEX: &str = "stac-items";
 const MAX_DESCENDANT_DEPTH: usize = 25;
 /// Cap on children fetched per query (proper pagination is future work).
 const MAX_CHILDREN: usize = 10_000;
+/// Default / max page size for item search (real pagination is TODO).
+const DEFAULT_SEARCH_LIMIT: u64 = 100;
+const MAX_SEARCH_LIMIT: u64 = 10_000;
 
 /// STAC node type tracked in the hierarchy DAG.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,7 +90,14 @@ impl Store {
                 ITEMS_INDEX,
                 json!({"properties": {
                     "id": {"type": "keyword"},
-                    "collection": {"type": "keyword"}
+                    "collection": {"type": "keyword"},
+                    "bbox": {"type": "float"},
+                    "geometry": {"type": "geo_shape"},
+                    "properties": {"properties": {
+                        "datetime": {"type": "date"},
+                        "start_datetime": {"type": "date"},
+                        "end_datetime": {"type": "date"}
+                    }}
                 }}),
             ),
         ];
@@ -109,6 +121,26 @@ impl Store {
                     }))
                     .send()
                     .await?;
+            } else {
+                // Index exists: apply additive mapping updates. Type
+                // changes to already-mapped fields (e.g. a legacy index
+                // where dynamic mapping made `geometry` an object) are
+                // rejected by OpenSearch — warn so the dev can drop and
+                // recreate the index.
+                let resp = self
+                    .client
+                    .indices()
+                    .put_mapping(IndicesPutMappingParts::Index(&[index]))
+                    .body(mappings)
+                    .send()
+                    .await?;
+                if !resp.status_code().is_success() {
+                    eprintln!(
+                        "warning: could not apply mapping updates to {index} \
+                         (field-type conflicts need a reindex — drop the index \
+                         and restart to rebuild it)"
+                    );
+                }
             }
         }
         Ok(())
@@ -392,20 +424,46 @@ impl Store {
 
     /// Item search scoped to a set of collections.
     /// Returns (item docs, total_matched) — sources pass through verbatim
-    /// since ItemCollection supports the fields extension. Full Search->DSL
-    /// translation (bbox, datetime, intersects, sortby) is future work.
+    /// since ItemCollection supports the fields extension.
+    /// Translates collections/ids/bbox/intersects/datetime/limit; sortby,
+    /// fields and pagination remain future work.
     pub async fn search_items(
         &self,
         collections: &[String],
-        limit: u64,
-    ) -> Result<(Vec<serde_json::Map<String, Value>>, u64), opensearch::Error> {
+        search: &Search,
+    ) -> Result<(Vec<Map<String, Value>>, u64), opensearch::Error> {
+        let limit = search
+            .items
+            .limit
+            .unwrap_or(DEFAULT_SEARCH_LIMIT)
+            .min(MAX_SEARCH_LIMIT);
+
+        let mut filter = vec![json!({"terms": {"collection": collections}})];
+        if !search.ids.is_empty() {
+            // _id == item.id (docs are indexed under their own id)
+            filter.push(json!({"ids": {"values": search.ids}}));
+        }
+        if let Some(bbox) = &search.items.bbox {
+            filter.push(bbox_filter(bbox));
+        }
+        if let Some(geom) = &search.intersects {
+            // geojson::Geometry serializes to a GeoJSON shape literal
+            filter.push(json!({"geo_shape": {"geometry": {
+                "shape": serde_json::to_value(geom).unwrap_or_default(),
+                "relation": "intersects"
+            }}}));
+        }
+        if let Some(datetime) = &search.items.datetime {
+            filter.push(datetime_filter(datetime));
+        }
+
         let resp = self
             .client
             .search(SearchParts::Index(&[ITEMS_INDEX]))
             .body(json!({
                 "size": limit,
                 "track_total_hits": true,
-                "query": {"terms": {"collection": collections}}
+                "query": {"bool": {"filter": filter}}
             }))
             .send()
             .await?;
@@ -444,6 +502,66 @@ impl Store {
             .await?;
         Ok(())
     }
+}
+
+/// STAC `bbox` -> geo_shape envelope query (intersects semantics).
+/// Envelope corners are [[min_lon, max_lat], [max_lon, min_lat]].
+fn bbox_filter(bbox: &Bbox) -> Value {
+    json!({"geo_shape": {"geometry": {
+        "shape": {"type": "envelope", "coordinates": [
+            [bbox.xmin(), bbox.ymax()],
+            [bbox.xmax(), bbox.ymin()]
+        ]},
+        "relation": "intersects"
+    }}})
+}
+
+/// An interval endpoint: empty / ".." / "null" means open-ended.
+fn dt_bound(s: &str) -> Option<&str> {
+    match s {
+        "" | ".." | "null" => None,
+        v => Some(v),
+    }
+}
+
+/// STAC `datetime` -> temporal filter. Covers both instant items
+/// (`properties.datetime`) and ranged items (`datetime: null` +
+/// `start_datetime`/`end_datetime`), matching either if it overlaps the
+/// query interval. A bare instant is treated as a zero-width interval.
+fn datetime_filter(datetime: &str) -> Value {
+    let (start, end) = match datetime.split_once('/') {
+        Some((s, e)) => (dt_bound(s), dt_bound(e)),
+        None => (dt_bound(datetime), dt_bound(datetime)),
+    };
+
+    let mut instant_range = Map::new();
+    if let Some(s) = start {
+        instant_range.insert("gte".into(), json!(s));
+    }
+    if let Some(e) = end {
+        instant_range.insert("lte".into(), json!(e));
+    }
+    if instant_range.is_empty() {
+        return json!({"match_all": {}});
+    }
+
+    // Ranged items overlap [start, end] iff start_datetime <= end AND
+    // end_datetime >= start (open bounds are simply omitted).
+    let mut ranged = Vec::new();
+    if let Some(e) = end {
+        ranged.push(json!({"range": {"properties.start_datetime": {"lte": e}}}));
+    }
+    if let Some(s) = start {
+        ranged.push(json!({"range": {"properties.end_datetime": {"gte": s}}}));
+    }
+    ranged.push(
+        json!({"bool": {"must_not": {"exists": {"field": "properties.datetime"}}}}),
+    );
+
+    json!({"bool": {"should": [
+        {"range": {"properties.datetime": instant_range}},
+        {"bool": {"filter": ranged}}
+    ], "minimum_should_match": 1}})
 }
 
 /// Mode B link semantics on a node's parent list: linking to a real
@@ -495,5 +613,64 @@ mod tests {
         let mut parents = vec!["a".to_string(), "b".to_string()];
         apply_unlink(&mut parents, "a");
         assert_eq!(parents, vec!["b"]);
+    }
+
+    #[test]
+    fn test_bbox_filter_envelope() {
+        let q = bbox_filter(&Bbox::new(-122.6, 36.9, -120.3, 38.2));
+        let shape = &q["geo_shape"]["geometry"]["shape"];
+        assert_eq!(shape["type"], "envelope");
+        assert_eq!(
+            shape["coordinates"],
+            json!([[-122.6, 38.2], [-120.3, 36.9]])
+        );
+        assert_eq!(q["geo_shape"]["geometry"]["relation"], "intersects");
+    }
+
+    #[test]
+    fn test_datetime_filter_instant() {
+        let q = datetime_filter("2023-06-15T00:00:00Z");
+        let should = q["bool"]["should"].as_array().unwrap();
+        // instant items: exact instant; ranged items: start<=v<=end
+        assert_eq!(
+            should[0]["range"]["properties.datetime"],
+            json!({"gte": "2023-06-15T00:00:00Z", "lte": "2023-06-15T00:00:00Z"})
+        );
+    }
+
+    #[test]
+    fn test_datetime_filter_interval() {
+        let q = datetime_filter("2023-06-01/2023-07-01");
+        let should = q["bool"]["should"].as_array().unwrap();
+        assert_eq!(
+            should[0]["range"]["properties.datetime"],
+            json!({"gte": "2023-06-01", "lte": "2023-07-01"})
+        );
+        let ranged = should[1]["bool"]["filter"].as_array().unwrap();
+        assert_eq!(
+            ranged[0]["range"]["properties.start_datetime"],
+            json!({"lte": "2023-07-01"})
+        );
+        assert_eq!(
+            ranged[1]["range"]["properties.end_datetime"],
+            json!({"gte": "2023-06-01"})
+        );
+    }
+
+    #[test]
+    fn test_datetime_filter_open_interval() {
+        // "2023-06-01/.." -> only a lower bound on both branches
+        let q = datetime_filter("2023-06-01/..");
+        let should = q["bool"]["should"].as_array().unwrap();
+        assert_eq!(
+            should[0]["range"]["properties.datetime"],
+            json!({"gte": "2023-06-01"})
+        );
+        let ranged = should[1]["bool"]["filter"].as_array().unwrap();
+        assert_eq!(ranged.len(), 2); // end_datetime gte + no-datetime guard
+        assert_eq!(
+            ranged[0]["range"]["properties.end_datetime"],
+            json!({"gte": "2023-06-01"})
+        );
     }
 }

@@ -272,6 +272,92 @@ async fn test_scoped_search_intersection() {
 }
 
 #[tokio::test]
+async fn test_search_bbox_datetime_intersects_ids() {
+    let Some(state) = test_state(true).await else {
+        eprintln!("skipping: OpenSearch unreachable");
+        return;
+    };
+    let app = build_app(state);
+    let cat = uniq("it-geo");
+    let col = uniq("it-geo-col");
+    let inside = uniq("it-geo-in");
+    let outside = uniq("it-geo-out");
+
+    call(&app, "POST", "/catalogs", Some(catalog(&cat))).await;
+    call(
+        &app,
+        "POST",
+        &format!("/catalogs/{cat}/collections"),
+        Some(collection(&col)),
+    )
+    .await;
+
+    // inside: SF-area point, June; outside: Boston point, August
+    let mut in_item = item(&inside);
+    in_item["geometry"] = json!({"type": "Point", "coordinates": [-122.0, 37.5]});
+    in_item["properties"]["datetime"] = json!("2023-06-15T00:00:00Z");
+    let mut out_item = item(&outside);
+    out_item["geometry"] = json!({"type": "Point", "coordinates": [-70.0, 42.0]});
+    out_item["properties"]["datetime"] = json!("2023-08-01T00:00:00Z");
+
+    for it in [in_item, out_item] {
+        let (s, _) = call(
+            &app,
+            "POST",
+            &format!("/catalogs/{cat}/collections/{col}/items"),
+            Some(it),
+        )
+        .await;
+        assert_eq!(s, StatusCode::CREATED);
+    }
+
+    let search = |body: Value| {
+        let app = app.clone();
+        let cat = cat.clone();
+        async move {
+            call(&app, "POST", &format!("/catalogs/{cat}/search"), Some(body)).await
+        }
+    };
+
+    // bbox: only the inside item intersects the SF box
+    let (s, body) = search(json!({"bbox": [-123.0, 37.0, -121.0, 38.0]})).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(body["numberMatched"], 1);
+    assert_eq!(body["features"][0]["id"], inside);
+
+    // bbox covering both
+    let (_, body) = search(json!({"bbox": [-180.0, -90.0, 180.0, 90.0]})).await;
+    assert_eq!(body["numberMatched"], 2);
+
+    // datetime interval and instant
+    let (_, body) = search(json!({"datetime": "2023-06-01/2023-07-01"})).await;
+    assert_eq!(body["numberMatched"], 1);
+    assert_eq!(body["features"][0]["id"], inside);
+    let (_, body) = search(json!({"datetime": "2023-08-01T00:00:00Z"})).await;
+    assert_eq!(body["numberMatched"], 1);
+    assert_eq!(body["features"][0]["id"], outside);
+
+    // intersects geometry
+    let (_, body) =
+        search(json!({"intersects": {"type": "Point", "coordinates": [-122.0, 37.5]}})).await;
+    assert_eq!(body["numberMatched"], 1);
+    assert_eq!(body["features"][0]["id"], inside);
+
+    // ids filter
+    let (_, body) = search(json!({"ids": [outside]})).await;
+    assert_eq!(body["numberMatched"], 1);
+    assert_eq!(body["features"][0]["id"], outside);
+
+    // bbox + intersects together is a spec violation -> 400
+    let (s, _) = search(json!({
+        "bbox": [-180.0, -90.0, 180.0, 90.0],
+        "intersects": {"type": "Point", "coordinates": [0.0, 0.0]}
+    }))
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn test_item_collection_mismatch_is_400() {
     let Some(state) = test_state(true).await else {
         eprintln!("skipping: OpenSearch unreachable");

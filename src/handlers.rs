@@ -248,6 +248,17 @@ async fn run_scoped_search(
     scope_id: &str,
     mut search: Search,
 ) -> Result<Json<ItemCollection>, ApiError> {
+    // Spec-level validation: bbox and intersects are mutually exclusive,
+    // and an inverted bbox is invalid.
+    search = search
+        .valid()
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    if let Some(bbox) = &search.items.bbox {
+        if !bbox.is_valid() {
+            return Err(ApiError::BadRequest("invalid bbox".into()));
+        }
+    }
+
     let empty = || {
         ItemCollection::new(Vec::new()).map_err(|e| ApiError::Internal(e.to_string()))
     };
@@ -270,9 +281,8 @@ async fn run_scoped_search(
         }
     }
 
-    // 3. Query OpenSearch using the resolved `collections` filter list
-    let limit = search.items.limit.unwrap_or(100);
-    let (items, matched) = state.store.search_items(&search.collections, limit).await?;
+    // 3. Query OpenSearch — collections scope + bbox/datetime/intersects/ids
+    let (items, matched) = state.store.search_items(&search.collections, &search).await?;
     let returned = items.len() as u64;
     let mut collection =
         ItemCollection::new(items).map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -499,7 +509,7 @@ pub async fn list_scoped_items(
     require_scoped_collection(&state, &catalog_id, &collection_id).await?;
     let (items, matched) = state
         .store
-        .search_items(&[collection_id], 100)
+        .search_items(&[collection_id], &Search::default())
         .await?;
     let returned = items.len() as u64;
     let mut collection =

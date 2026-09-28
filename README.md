@@ -33,10 +33,12 @@ When unset, only the read surface is mounted and the landing page `conformsTo` o
 | Method | Path | Description |
 |---|---|---|
 | GET | `/` | Landing page (`conformsTo`, links) |
-| GET | `/catalogs` | List top-level catalogs |
+| GET | `/catalogs` | List top-level catalogs (`?limit=&token=` paging) |
 | GET | `/catalogs/{catalog_id}` | Fetch a catalog |
-| GET | `/catalogs/{catalog_id}/children` | List children (`?type=Catalog\|Collection`) |
-| GET | `/catalogs/{catalog_id}/collections` | List collections in scope |
+| GET | `/catalogs/{catalog_id}/catalogs` | List sub-catalogs of a catalog |
+| GET | `/catalogs/{catalog_id}/conformance` | Catalog-scoped `conformsTo` classes |
+| GET | `/catalogs/{catalog_id}/children` | List children (`?type=Catalog\|Collection`, `?limit=&token=`) |
+| GET | `/catalogs/{catalog_id}/collections` | List collections in scope (`?limit=&token=`) |
 | GET | `/catalogs/{catalog_id}/collections/{collection_id}` | Fetch a scoped collection |
 | GET | `/catalogs/{catalog_id}/collections/{collection_id}/items` | List items in a scoped collection |
 | GET | `/catalogs/{catalog_id}/collections/{collection_id}/items/{item_id}` | Fetch a scoped item |
@@ -86,7 +88,7 @@ docker compose up -d opensearch
 cargo run     # API on http://localhost:3000
 ```
 
-Config via env vars: `OPENSEARCH_URL` (default `http://localhost:9200`), `ENABLE_TRANSACTIONS_EXTENSIONS` (enables all write endpoints; set in `compose.yml` by default).
+Config via env vars: `OPENSEARCH_URL` (default `http://localhost:9200`), `ENABLE_TRANSACTIONS_EXTENSIONS` (enables all write endpoints; set in `compose.yml` by default), `CATALOGS_HIDE_ALTERNATE_PARENTS` (suppresses `related`/`duplicate` links and extra `parent` links on poly-hierarchy resources).
 
 Other handy commands: `cargo check` (fast type-check, no binary), `cargo test` (unit + integration tests — integration tests need OpenSearch running, and skip automatically if it's not), `cargo add <crate>` (add a dependency).
 
@@ -135,9 +137,13 @@ This is a prototype — the endpoints exist but several are shallow. Known gaps:
 - No optimistic concurrency: concurrent link/unlink on the same node can lost-update (needs `_seq_no`/`_primary_term` or scripted upserts)
 - Reserved IDs: a catalog named `search` collides with the static route — should 400 on create
 - Orphaned docs: a hierarchy node whose document is missing is silently skipped in children listings — needs a consistency check
+- Catalogs don't emit per-child `rel: child` links (upstream behavior) — the `children` endpoint link is provided instead
+- User-provided `links` in POST/PUT bodies are replaced by generated links on read (upstream merges non-dynamic user links — a deliberate divergence for now)
+- No request-body STAC schema validation yet (`stac-validate` crate planned)
 
 **Ops**
 - Integration tests write `it-*` fixtures into the same indices as dev data — needs index isolation or cleanup
 - OpenSearch runs single-node with the security plugin disabled — dev only, harden before anything else
 - No auth or per-tenant authorization — catalog scope is organizational only, not a security boundary
-- Mode B link allows linking *any* existing resource id with no existence validation on the parent
+
+**Tests** — `tests/catalogs.rs` ports `stac-fastapi-elasticsearch-opensearch`'s `test_catalogs.py` (103 passing, 17 `#[ignore]`d pending: optimistic concurrency, `stac-validate`, per-child `child` links, root `/collections` routes).

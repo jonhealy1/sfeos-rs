@@ -20,6 +20,7 @@ impl LinkEngine {
         collection_id: &str,
         scoped_catalog_id: &str,
         all_parent_ids: &[String],
+        hide_alternate_parents: bool,
     ) -> Vec<Link> {
         let scoped_self = self
             .base_url
@@ -46,7 +47,7 @@ impl LinkEngine {
 
         // Expose alternate poly-hierarchy parents as "related" and "duplicate"
         for parent in all_parent_ids {
-            if parent != scoped_catalog_id {
+            if parent != scoped_catalog_id && !hide_alternate_parents {
                 let alt_parent_url = self.base_url.join(&format!("/catalogs/{parent}")).unwrap();
                 let dup_scoped_url = self
                     .base_url

@@ -211,16 +211,18 @@ async fn test_scoped_search_intersection() {
     assert_eq!(s, StatusCode::OK);
     assert_eq!(body["numberReturned"], 0);
 
-    // Registry-wide search also finds it (everything is under root)
-    let (s, body) = call(&app, "POST", "/catalogs/search", Some(json!({}))).await;
+    // Registry-wide search also finds it (everything is under root).
+    // Use an ids filter — the shared dev index outgrows the default page.
+    let (s, body) = call(
+        &app,
+        "POST",
+        "/catalogs/search",
+        Some(json!({"ids": [it]})),
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
-    let ids: Vec<&str> = body["features"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|f| f["id"].as_str())
-        .collect();
-    assert!(ids.contains(&it.as_str()));
+    assert_eq!(body["numberMatched"], 1);
+    assert_eq!(body["features"][0]["id"], it);
 }
 
 #[tokio::test]

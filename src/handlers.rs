@@ -180,6 +180,30 @@ fn collection_links(state: &AppState, collection_id: &str, scoped_catalog_id: &s
     )
 }
 
+/// Serialize a catalog with its DAG-derived links injected — write
+/// responses mirror what a subsequent GET would return.
+async fn catalog_doc(state: &AppState, catalog: &Catalog) -> Result<serde_json::Value, ApiError> {
+    let parents = state.store.get_parents(&catalog.id).await?;
+    let mut doc =
+        serde_json::to_value(catalog).map_err(|e| ApiError::Internal(e.to_string()))?;
+    doc["links"] = json!(catalog_links(state, &catalog.id, &parents));
+    Ok(doc)
+}
+
+/// Serialize a collection with links for the given scope context.
+async fn collection_doc(
+    state: &AppState,
+    collection: &Collection,
+    scoped_catalog_id: &str,
+) -> Result<serde_json::Value, ApiError> {
+    let parents = state.store.get_parents(&collection.id).await?;
+    let mut doc =
+        serde_json::to_value(collection).map_err(|e| ApiError::Internal(e.to_string()))?;
+    doc["links"] =
+        json!(collection_links(state, &collection.id, scoped_catalog_id, &parents));
+    Ok(doc)
+}
+
 // --- Discovery Handlers ---
 
 pub async fn root_landing_page(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
@@ -274,7 +298,7 @@ pub async fn create_root_catalog(
         .store
         .index_document(CATALOGS_INDEX, &catalog.id, &catalog)
         .await?;
-    Ok((StatusCode::CREATED, Json(json!(catalog))))
+    Ok((StatusCode::CREATED, Json(catalog_doc(&state, &catalog).await?)))
 }
 
 pub async fn get_catalog(
@@ -307,7 +331,7 @@ pub async fn update_catalog(
         .store
         .index_document(CATALOGS_INDEX, &catalog_id, &catalog)
         .await?;
-    Ok(Json(json!(catalog)))
+    Ok(Json(catalog_doc(&state, &catalog).await?))
 }
 
 pub async fn get_catalog_children(
@@ -641,7 +665,10 @@ pub async fn link_or_create_sub_catalog(
                 .store
                 .index_document(CATALOGS_INDEX, &new_catalog.id, &new_catalog)
                 .await?;
-            Ok((StatusCode::CREATED, Json(json!(new_catalog))))
+            Ok((
+                StatusCode::CREATED,
+                Json(catalog_doc(&state, &new_catalog).await?),
+            ))
         }
     }
 }
@@ -760,13 +787,16 @@ pub async fn link_or_create_scoped_collection(
             }
             state
                 .store
-                .set_parents(&collection.id, vec![catalog_id], NodeKind::Collection)
+                .set_parents(&collection.id, vec![catalog_id.clone()], NodeKind::Collection)
                 .await?;
             state
                 .store
                 .index_document(COLLECTIONS_INDEX, &collection.id, &collection)
                 .await?;
-            Ok((StatusCode::CREATED, Json(json!(collection))))
+            Ok((
+                StatusCode::CREATED,
+                Json(collection_doc(&state, &collection, &catalog_id).await?),
+            ))
         }
     }
 }
@@ -807,7 +837,7 @@ pub async fn update_scoped_collection(
         .store
         .index_document(COLLECTIONS_INDEX, &collection_id, &collection)
         .await?;
-    Ok(Json(json!(collection)))
+    Ok(Json(collection_doc(&state, &collection, &catalog_id).await?))
 }
 
 pub async fn unlink_scoped_collection(

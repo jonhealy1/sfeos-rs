@@ -30,13 +30,19 @@ pub async fn test_state(enable_transactions: bool) -> Option<Arc<AppState>> {
 }
 
 /// Full control over feature flags (transactions, hide_alternate_parents).
+///
+/// Each call gets a unique `it-<nanos>` index prefix — every test runs
+/// against isolated, empty indices. `make test*` sweeps `it-*` after the
+/// run (`curl -XDELETE "$OPENSEARCH_URL/it-*"` for manual cleanup).
 pub async fn test_state_full(
     enable_transactions: bool,
     hide_alternate_parents: bool,
 ) -> Option<Arc<AppState>> {
     let url =
         std::env::var("OPENSEARCH_URL").unwrap_or_else(|_| "http://localhost:9200".to_string());
-    let store = Store::connect(&url).ok()?;
+    let store = Store::connect(&url)
+        .ok()?
+        .with_index_prefix(uniq("it"));
     store.ensure_indices().await.ok()?;
     Some(Arc::new(AppState {
         base_url: "http://test".to_string(),

@@ -4,7 +4,9 @@ use opensearch::{
         transport::{SingleNodeConnectionPool, TransportBuilder},
         StatusCode, Url,
     },
-    indices::{IndicesCreateParts, IndicesExistsParts, IndicesPutMappingParts},
+    indices::{
+        IndicesCreateParts, IndicesDeleteParts, IndicesExistsParts, IndicesPutMappingParts,
+    },
     DeleteParts, GetParts, IndexParts, MgetParts, OpenSearch, SearchParts,
 };
 use serde::{Deserialize, Serialize};
@@ -15,10 +17,13 @@ use std::collections::{HashMap, HashSet};
 
 pub const ROOT_CATALOG_ID: &str = "root";
 
-pub const HIERARCHY_INDEX: &str = "stac-hierarchy";
-pub const CATALOGS_INDEX: &str = "stac-catalogs";
-pub const COLLECTIONS_INDEX: &str = "stac-collections";
-pub const ITEMS_INDEX: &str = "stac-items";
+/// Logical index names — `Store` prepends its index prefix
+/// (`{prefix}-{logical}`). The default `stac` prefix maps onto the
+/// historical `stac-catalogs` / `stac-items` / ... index names.
+pub const HIERARCHY_INDEX: &str = "hierarchy";
+pub const CATALOGS_INDEX: &str = "catalogs";
+pub const COLLECTIONS_INDEX: &str = "collections";
+pub const ITEMS_INDEX: &str = "items";
 
 /// Safety cap on DAG depth when resolving descendants.
 const MAX_DESCENDANT_DEPTH: usize = 25;
@@ -56,6 +61,7 @@ pub struct ChildNode {
 #[derive(Clone)]
 pub struct Store {
     client: OpenSearch,
+    prefix: String,
 }
 
 impl Store {
@@ -65,7 +71,31 @@ impl Store {
         let transport = TransportBuilder::new(pool).build()?;
         Ok(Self {
             client: OpenSearch::new(transport),
+            prefix: "stac".to_string(),
         })
+    }
+
+    /// Use `{prefix}-{logical}` index names instead of `stac-*` — tests
+    /// get fully isolated indices.
+    pub fn with_index_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.prefix = prefix.into();
+        self
+    }
+
+    /// The physical index name for a logical index constant.
+    fn idx(&self, logical: &str) -> String {
+        format!("{}-{}", self.prefix, logical)
+    }
+
+    /// Delete every `{prefix}-*` index — test teardown helper.
+    pub async fn drop_indices(&self) -> Result<(), opensearch::Error> {
+        let pattern = format!("{}-*", self.prefix);
+        self.client
+            .indices()
+            .delete(IndicesDeleteParts::Index(&[&pattern]))
+            .send()
+            .await?;
+        Ok(())
     }
 
     /// Create the STAC indices on startup if they don't already exist.
@@ -102,17 +132,18 @@ impl Store {
             ),
         ];
 
-        for (index, mappings) in indices {
+        for (logical, mappings) in indices {
+            let index = self.idx(logical);
             let exists = self
                 .client
                 .indices()
-                .exists(IndicesExistsParts::Index(&[index]))
+                .exists(IndicesExistsParts::Index(&[&index]))
                 .send()
                 .await?;
             if !exists.status_code().is_success() {
                 self.client
                     .indices()
-                    .create(IndicesCreateParts::Index(index))
+                    .create(IndicesCreateParts::Index(&index))
                     // 0 replicas: dev default is single-node; without this
                     // every index sits yellow with unassigned shards.
                     .body(json!({
@@ -130,7 +161,7 @@ impl Store {
                 let resp = self
                     .client
                     .indices()
-                    .put_mapping(IndicesPutMappingParts::Index(&[index]))
+                    .put_mapping(IndicesPutMappingParts::Index(&[&index]))
                     .body(mappings)
                     .send()
                     .await?;
@@ -197,8 +228,9 @@ impl Store {
     /// `parents` queries, deleting the doc detaches it from every parent.
     /// Callers must unlink the node's own children first.
     pub async fn remove_node(&self, node_id: &str) -> Result<(), opensearch::Error> {
+        let index = self.idx(HIERARCHY_INDEX);
         self.client
-            .delete(DeleteParts::IndexId(HIERARCHY_INDEX, node_id))
+            .delete(DeleteParts::IndexId(&index, node_id))
             .refresh(opensearch::params::Refresh::WaitFor)
             .send()
             .await?;
@@ -256,9 +288,10 @@ impl Store {
         if let Some(kind) = kind {
             must.push(json!({"term": {"kind": kind}}));
         }
+        let index = self.idx(HIERARCHY_INDEX);
         let resp = self
             .client
-            .search(SearchParts::Index(&[HIERARCHY_INDEX]))
+            .search(SearchParts::Index(&[&index]))
             .body(json!({
                 "size": MAX_CHILDREN,
                 "query": {"bool": {"must": must}}
@@ -290,9 +323,10 @@ impl Store {
         if ids.is_empty() {
             return Ok(HashMap::new());
         }
+        let index = self.idx(HIERARCHY_INDEX);
         let resp = self
             .client
-            .mget(MgetParts::Index(HIERARCHY_INDEX))
+            .mget(MgetParts::Index(&index))
             .body(json!({"ids": ids}))
             .send()
             .await?;
@@ -324,9 +358,10 @@ impl Store {
             if frontier.is_empty() {
                 break;
             }
+            let index = self.idx(HIERARCHY_INDEX);
             let resp = self
                 .client
-                .search(SearchParts::Index(&[HIERARCHY_INDEX]))
+                .search(SearchParts::Index(&[&index]))
                 .body(json!({
                     "size": MAX_CHILDREN,
                     "query": {"terms": {"parents": frontier}}
@@ -362,8 +397,9 @@ impl Store {
         id: &str,
         doc: impl Serialize,
     ) -> Result<(), opensearch::Error> {
+        let index = self.idx(index);
         self.client
-            .index(IndexParts::IndexId(index, id))
+            .index(IndexParts::IndexId(&index, id))
             .body(doc)
             .refresh(opensearch::params::Refresh::WaitFor)
             .send()
@@ -376,9 +412,10 @@ impl Store {
         index: &str,
         id: &str,
     ) -> Result<Option<Value>, opensearch::Error> {
+        let index = self.idx(index);
         let resp = self
             .client
-            .get(GetParts::IndexId(index, id))
+            .get(GetParts::IndexId(&index, id))
             .send()
             .await?;
         if resp.status_code() == StatusCode::NOT_FOUND {
@@ -389,8 +426,9 @@ impl Store {
     }
 
     pub async fn delete_document(&self, index: &str, id: &str) -> Result<(), opensearch::Error> {
+        let index = self.idx(index);
         self.client
-            .delete(DeleteParts::IndexId(index, id))
+            .delete(DeleteParts::IndexId(&index, id))
             .refresh(opensearch::params::Refresh::WaitFor)
             .send()
             .await?;
@@ -406,9 +444,10 @@ impl Store {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
+        let index = self.idx(index);
         let resp = self
             .client
-            .mget(MgetParts::Index(index))
+            .mget(MgetParts::Index(&index))
             .body(json!({"ids": ids}))
             .send()
             .await?;
@@ -459,9 +498,10 @@ impl Store {
             filter.push(datetime_filter(datetime));
         }
 
+        let index = self.idx(ITEMS_INDEX);
         let resp = self
             .client
-            .search(SearchParts::Index(&[ITEMS_INDEX]))
+            .search(SearchParts::Index(&[&index]))
             .body(json!({
                 "size": limit,
                 "from": offset,
@@ -484,9 +524,10 @@ impl Store {
     // --- node doc helpers ---
 
     async fn get_node(&self, node_id: &str) -> Result<Option<HierarchyNode>, opensearch::Error> {
+        let index = self.idx(HIERARCHY_INDEX);
         let resp = self
             .client
-            .get(GetParts::IndexId(HIERARCHY_INDEX, node_id))
+            .get(GetParts::IndexId(&index, node_id))
             .send()
             .await?;
         if resp.status_code() == StatusCode::NOT_FOUND {
@@ -497,8 +538,9 @@ impl Store {
     }
 
     async fn put_node(&self, node_id: &str, node: &HierarchyNode) -> Result<(), opensearch::Error> {
+        let index = self.idx(HIERARCHY_INDEX);
         self.client
-            .index(IndexParts::IndexId(HIERARCHY_INDEX, node_id))
+            .index(IndexParts::IndexId(&index, node_id))
             .body(node)
             .refresh(opensearch::params::Refresh::WaitFor)
             .send()

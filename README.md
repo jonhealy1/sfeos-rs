@@ -142,8 +142,7 @@ This is a prototype — the endpoints exist but several are shallow. Known gaps:
 - No request-body STAC schema validation yet (`stac-validate` crate planned)
 
 **Ops**
-- Integration tests write `it-*` fixtures into the same indices as dev data — needs index isolation or cleanup
 - OpenSearch runs single-node with the security plugin disabled — dev only, harden before anything else
 - No auth or per-tenant authorization — catalog scope is organizational only, not a security boundary
 
-**Tests** — `tests/catalogs.rs` ports `stac-fastapi-elasticsearch-opensearch`'s `test_catalogs.py` (103 passing, 17 `#[ignore]`d pending: optimistic concurrency, `stac-validate`, per-child `child` links, root `/collections` routes).
+**Tests** — `tests/catalogs.rs` ports `stac-fastapi-elasticsearch-opensearch`'s `test_catalogs.py` (103 passing, 17 `#[ignore]`d pending: optimistic concurrency, `stac-validate`, per-child `child` links, root `/collections` routes). Each test gets isolated `it-*` indices (unique `Store` index prefix), so tests never touch dev data — `make test*` sweeps `it-*` afterwards, or `make test-clean` manually.

@@ -376,6 +376,90 @@ async fn test_search_pagination() {
 }
 
 #[tokio::test]
+async fn test_search_sortby() {
+    let Some(state) = test_state(true).await else {
+        eprintln!("skipping: OpenSearch unreachable");
+        return;
+    };
+    let app = build_app(state);
+    let cat = uniq("it-sort");
+    let col = uniq("it-sort-col");
+
+    call(&app, "POST", "/catalogs", Some(catalog(&cat))).await;
+    call(
+        &app,
+        "POST",
+        &format!("/catalogs/{cat}/collections"),
+        Some(collection(&col)),
+    )
+    .await;
+    let datetimes = [
+        "2023-03-01T00:00:00Z",
+        "2023-01-01T00:00:00Z",
+        "2023-02-01T00:00:00Z",
+    ];
+    let mut ids = Vec::new();
+    for (i, dt) in datetimes.iter().enumerate() {
+        let id = uniq(&format!("it-sort-item-{i}"));
+        let mut doc = item(&id);
+        doc["properties"]["datetime"] = json!(dt);
+        let (s, _) = call(
+            &app,
+            "POST",
+            &format!("/catalogs/{cat}/collections/{col}/items"),
+            Some(doc),
+        )
+        .await;
+        assert_eq!(s, StatusCode::CREATED);
+        ids.push(id);
+    }
+
+    let order = |body: Value| {
+        let app = app.clone();
+        let cat = cat.clone();
+        async move {
+            let (s, b) =
+                call(&app, "POST", &format!("/catalogs/{cat}/search"), Some(body)).await;
+            assert_eq!(s, StatusCode::OK);
+            b["features"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|f| f["id"].as_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        }
+    };
+
+    // ascending datetime -> chronological order
+    let asc = order(json!({"sortby": [{"field": "datetime", "direction": "asc"}]})).await;
+    assert_eq!(asc, vec![ids[1].clone(), ids[2].clone(), ids[0].clone()]);
+
+    // descending -> reversed
+    let desc = order(json!({"sortby": [{"field": "properties.datetime", "direction": "desc"}]})).await;
+    assert_eq!(desc, vec![ids[0].clone(), ids[2].clone(), ids[1].clone()]);
+
+    // GET shorthand: ?sortby=-id
+    let (s, body) = call(
+        &app,
+        "GET",
+        &format!("/catalogs/{cat}/search?sortby=-id"),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let mut sorted_ids = ids.clone();
+    sorted_ids.sort();
+    sorted_ids.reverse();
+    let got: Vec<&str> = body["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|f| f["id"].as_str())
+        .collect();
+    assert_eq!(got, sorted_ids);
+}
+
+#[tokio::test]
 async fn test_item_collection_mismatch_is_400() {
     let Some(state) = test_state(true).await else {
         eprintln!("skipping: OpenSearch unreachable");

@@ -498,16 +498,37 @@ impl Store {
             filter.push(datetime_filter(datetime));
         }
 
+        // sortby -> OpenSearch `sort` clauses; `_id` is appended as a
+        // tiebreaker so paging is deterministic.
+        let mut sort: Vec<Value> = search
+            .items
+            .sortby
+            .iter()
+            .map(|s| {
+                json!({sort_field(&s.field): {
+                    "order": s.direction,
+                    "missing": "_last"
+                }})
+            })
+            .collect();
+        if !sort.is_empty() {
+            sort.push(json!({"_id": {"order": "asc"}}));
+        }
+
         let index = self.idx(ITEMS_INDEX);
+        let mut body = json!({
+            "size": limit,
+            "from": offset,
+            "track_total_hits": true,
+            "query": {"bool": {"filter": filter}}
+        });
+        if !sort.is_empty() {
+            body["sort"] = json!(sort);
+        }
         let resp = self
             .client
             .search(SearchParts::Index(&[&index]))
-            .body(json!({
-                "size": limit,
-                "from": offset,
-                "track_total_hits": true,
-                "query": {"bool": {"filter": filter}}
-            }))
+            .body(body)
             .send()
             .await?;
         let body = resp.json::<Value>().await?;
@@ -546,6 +567,16 @@ impl Store {
             .send()
             .await?;
         Ok(())
+    }
+}
+
+/// sortby field -> document field. Top-level item fields pass through;
+/// anything else is a `properties.*` member (bare `datetime` included).
+fn sort_field(field: &str) -> String {
+    match field {
+        "id" | "collection" | "bbox" | "geometry" | "type" => field.to_string(),
+        f if f.contains('.') => f.to_string(),
+        f => format!("properties.{f}"),
     }
 }
 
@@ -669,6 +700,15 @@ mod tests {
         let mut parents = vec!["a".to_string(), "b".to_string()];
         apply_unlink(&mut parents, "a");
         assert_eq!(parents, vec!["b"]);
+    }
+
+    #[test]
+    fn test_sort_field_mapping() {
+        assert_eq!(sort_field("id"), "id");
+        assert_eq!(sort_field("collection"), "collection");
+        assert_eq!(sort_field("datetime"), "properties.datetime");
+        assert_eq!(sort_field("properties.created"), "properties.created");
+        assert_eq!(sort_field("eo:cloud_cover"), "properties.eo:cloud_cover");
     }
 
     #[test]

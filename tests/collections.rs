@@ -172,3 +172,114 @@ async fn test_collection_items_404s() {
     let (s, _) = call(&app, "GET", "/collections/nope/items/x", None).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn test_collection_items_pagination() {
+    let Some((app, _)) = test_app(true).await else { return };
+    let cat = uniq("ip-cat");
+    let col = uniq("ip-col");
+    call(&app, "POST", "/catalogs", Some(catalog(&cat))).await;
+    call(
+        &app,
+        "POST",
+        &format!("/catalogs/{cat}/collections"),
+        Some(collection(&col)),
+    )
+    .await;
+    for i in 0..3 {
+        call(
+            &app,
+            "POST",
+            &format!("/catalogs/{cat}/collections/{col}/items"),
+            Some(item(&uniq(&format!("ip-item-{i}")), &col)),
+        )
+        .await;
+    }
+    let (s, page1) = call(&app, "GET", &format!("/collections/{col}/items?limit=2"), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(page1["numberReturned"], 2);
+    assert_eq!(page1["numberMatched"], 3);
+    let next = links_by_rel(&page1, "next").pop().expect("missing next link");
+    let href = next["href"].as_str().unwrap();
+    assert!(href.contains("token="));
+    let token = href.split("token=").nth(1).unwrap().split('&').next().unwrap();
+    let (s, page2) = call(
+        &app,
+        "GET",
+        &format!("/collections/{col}/items?limit=2&token={token}"),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(page2["numberReturned"], 1);
+}
+
+#[tokio::test]
+async fn test_scoped_items_pagination() {
+    let Some((app, _)) = test_app(true).await else { return };
+    let cat = uniq("sip-cat");
+    let col = uniq("sip-col");
+    call(&app, "POST", "/catalogs", Some(catalog(&cat))).await;
+    call(
+        &app,
+        "POST",
+        &format!("/catalogs/{cat}/collections"),
+        Some(collection(&col)),
+    )
+    .await;
+    for i in 0..3 {
+        call(
+            &app,
+            "POST",
+            &format!("/catalogs/{cat}/collections/{col}/items"),
+            Some(item(&uniq(&format!("sip-item-{i}")), &col)),
+        )
+        .await;
+    }
+    let (s, page1) = call(
+        &app,
+        "GET",
+        &format!("/catalogs/{cat}/collections/{col}/items?limit=2"),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(page1["numberReturned"], 2);
+    assert_eq!(page1["numberMatched"], 3);
+}
+
+#[tokio::test]
+async fn test_sortables_endpoint() {
+    let Some((app, _)) = test_app(true).await else { return };
+    let (s, body) = call(&app, "GET", "/sortables", None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(body["type"], "object");
+    assert_eq!(body["additionalProperties"], true);
+    let props = body["properties"].as_object().unwrap();
+    assert!(props.contains_key("id"));
+    assert!(props.contains_key("collection"));
+    assert!(props.contains_key("datetime"));
+}
+
+#[tokio::test]
+async fn test_landing_advertises_sort_and_sortables() {
+    let Some((app, _)) = test_app(true).await else { return };
+    let (s, body) = call(&app, "GET", "/", None).await;
+    assert_eq!(s, StatusCode::OK);
+    let conforms: Vec<&str> = body["conformsTo"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|u| u.as_str())
+        .collect();
+    for uri in [
+        "https://api.stacspec.org/v1.0.0/item-search",
+        "https://api.stacspec.org/v1.1.0/item-search#sort",
+        "https://api.stacspec.org/v1.1.0/item-search#sortables",
+    ] {
+        assert!(conforms.contains(&uri), "missing {uri}");
+    }
+    let sortables = links_by_rel(&body, "http://www.opengis.net/def/rel/ogc/1.0/sortables");
+    assert_eq!(sortables.len(), 1);
+    assert!(sortables[0]["href"].as_str().unwrap().ends_with("/sortables"));
+}

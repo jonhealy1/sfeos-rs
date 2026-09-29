@@ -33,9 +33,10 @@ When unset, only the read surface is mounted and the landing page `conformsTo` o
 | Method | Path | Supports |
 |---|---|---|
 | GET | `/` | Landing page (`conformsTo`, links) |
+| GET | `/sortables` | OGC Sortables schema for `sortby` discovery |
 | GET | `/collections` | `?limit=&token=` paging |
 | GET | `/collections/{collection_id}` | Canonical links (`self`, `parent` per parent, `duplicate`) |
-| GET | `/collections/{collection_id}/items` | `numberMatched`/`numberReturned` |
+| GET | `/collections/{collection_id}/items` | `?limit=&token=` paging |
 | GET | `/collections/{collection_id}/items/{item_id}` | — |
 | GET | `/catalogs` | `?limit=&token=` paging (default 10) |
 | GET | `/catalogs/{catalog_id}` | Dynamic links (`parent` per parent, `children`, `data`, `search`) |
@@ -44,12 +45,12 @@ When unset, only the read surface is mounted and the landing page `conformsTo` o
 | GET | `/catalogs/{catalog_id}/children` | `?type=Catalog\|Collection` filter, `?limit=&token=` paging |
 | GET | `/catalogs/{catalog_id}/collections` | `?limit=&token=` paging |
 | GET | `/catalogs/{catalog_id}/collections/{collection_id}` | Contextual `self`/`parent`, alt parents as `related`/`duplicate` |
-| GET | `/catalogs/{catalog_id}/collections/{collection_id}/items` | `numberMatched`/`numberReturned` |
+| GET | `/catalogs/{catalog_id}/collections/{collection_id}/items` | `?limit=&token=` paging |
 | GET | `/catalogs/{catalog_id}/collections/{collection_id}/items/{item_id}` | — |
-| GET/POST | `/catalogs/search` | Whole-registry scope. Filters: `collections`, `ids`, `bbox`, `intersects`, `datetime`, `limit`, `offset` → `next`/`prev` links |
+| GET/POST | `/catalogs/search` | Whole-registry scope. Filters: `collections`, `ids`, `bbox`, `intersects`, `datetime`, `sortby`, `limit`, `offset` → `next`/`prev` links |
 | GET/POST | `/catalogs/{catalog_id}/search` | Same filters, intersected with the catalog's descendant collections |
 
-GET search takes `bbox`, `datetime`, `ids`, `collections`, `limit` as query params; POST takes the full `Search` body (`intersects` included). `sortby`, `fields`, `query`, and CQL2 `filter` are parsed but not yet applied.
+GET search takes `bbox`, `datetime`, `ids`, `collections`, `limit`, `sortby` (`+field`/`-field` shorthand) as query params; POST takes the full `Search` body (`intersects` included). `fields`, `query`, and CQL2 `filter` are parsed but not yet applied.
 
 ### Transactions — require `ENABLE_TRANSACTIONS_EXTENSIONS`
 
@@ -77,6 +78,7 @@ Status codes: `201` create (Mode A), `200` link (Mode B `{"id": ...}`) / update,
 |---|---|---|
 | GET/POST | `/search` | 404 — links already point here |
 | GET | `/conformance` | 404 — catalog-scoped variant exists |
+| GET | `/collections/{id}/sortables` | 404 — root `/sortables` exists |
 | GET | `/collections/{id}/queryables` | 404 |
 | POST | `/catalogs/{id}/bulk` | 404 — bulk transactions extension |
 
@@ -139,10 +141,10 @@ Then try scoped search: `POST /catalogs/earth-observation/search` returns its 4 
 This is a prototype — the endpoints exist but several are shallow. Known gaps:
 
 **Search**
-- `collections`, `ids`, `bbox`, `intersects`, `datetime`, and `limit` are translated to OpenSearch queries — `sortby`, `fields`, and `query` are parsed but ignored
+- `collections`, `ids`, `bbox`, `intersects`, `datetime`, `sortby`, and `limit` are translated to OpenSearch queries — `fields` and `query` are parsed but ignored
 - `datetime` bounds must be full RFC3339 datetimes — date-only inputs (`2023-06-01`) are rejected at validation
 - No CQL2 / filter extension support
-- Offset pagination exists: `{"offset": n}` in the search body + `next`/`prev` links (`method: POST`, `body`) in responses. Deep paging (>10k) needs `search_after`/cursor — not implemented. `GET .../items` doesn't paginate yet
+- Offset pagination exists: `{"offset": n}` in the search body + `next`/`prev` links (`method: POST`, `body`) in responses; items listings use `?limit=&token=`. Deep paging (>10k) needs `search_after`/cursor — not implemented
 
 **Core STAC routes** (links already point here — currently dead until implemented)
 - `GET/POST /search`, `/collections`, `/collections/{id}`, `/collections/{id}/items` at the root

@@ -271,6 +271,9 @@ async fn collection_doc(
 pub async fn root_landing_page(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let mut conforms_to = vec![
         "https://api.stacspec.org/v1.0.0/core",
+        "https://api.stacspec.org/v1.0.0/item-search",
+        "https://api.stacspec.org/v1.1.0/item-search#sort",
+        "https://api.stacspec.org/v1.1.0/item-search#sortables",
         "https://api.stacspec.org/v1.0.0/multi-tenant-catalogs",
         "https://api.stacspec.org/v1.0.0/multi-tenant-catalogs/search",
         "https://api.stacspec.org/v1.0.0/children",
@@ -289,6 +292,7 @@ pub async fn root_landing_page(State(state): State<Arc<AppState>>) -> Json<serde
         "links": [
             { "rel": "self", "type": "application/json", "href": "http://localhost:3000/" },
             { "rel": "data", "type": "application/json", "href": "http://localhost:3000/collections" },
+            { "rel": "http://www.opengis.net/def/rel/ogc/1.0/sortables", "type": "application/schema+json", "href": "http://localhost:3000/sortables", "title": "Sortables" },
             { "rel": "catalogs", "type": "application/json", "href": "http://localhost:3000/catalogs", "title": "Multi-Tenant Catalogs Registry" }
         ]
     }))
@@ -538,6 +542,26 @@ pub async fn list_sub_catalogs(
     })))
 }
 
+/// GET /sortables — OGC Sortables schema for item search.
+/// `additionalProperties: true` matches our permissive sort (unknown
+/// fields sort last, evaluating to null), so any name is legal.
+pub async fn sortables(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    Json(json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": format!("{}/sortables", state.base_url),
+        "type": "object",
+        "title": "Item Search Sortables",
+        "description": "Fields usable in the `sortby` parameter for item search.",
+        "properties": {
+            "id": {"type": "string"},
+            "collection": {"type": "string"},
+            "datetime": {"type": "string", "format": "date-time"},
+            "properties.datetime": {"type": "string", "format": "date-time"}
+        },
+        "additionalProperties": true
+    }))
+}
+
 /// GET /catalogs/{id}/conformance — catalog-scoped conformance classes.
 pub async fn catalog_conformance(
     Path(catalog_id): Path<String>,
@@ -546,11 +570,13 @@ pub async fn catalog_conformance(
     require_catalog(&state, &catalog_id).await?;
     let mut conforms_to = vec![
         "https://api.stacspec.org/v1.0.0/core",
+        "https://api.stacspec.org/v1.0.0/item-search",
+        "https://api.stacspec.org/v1.1.0/item-search#sort",
+        "https://api.stacspec.org/v1.1.0/item-search#sortables",
         "https://api.stacspec.org/v1.0.0/multi-tenant-catalogs",
         "https://api.stacspec.org/v1.0.0/multi-tenant-catalogs/search",
         "https://api.stacspec.org/v1.0.0/children",
         "https://api.stacspec.org/v1.0.0/children#type-filter",
-        "https://api.stacspec.org/v1.0.0/item-search",
     ];
     if state.enable_transactions {
         conforms_to.push("https://api.stacspec.org/v1.0.0/multi-tenant-catalogs/transaction");
@@ -981,8 +1007,10 @@ pub async fn get_collection(
 }
 
 /// GET /collections/{id}/items — global item listing for a collection.
+/// Upstream-compatible `?limit=&token=` paging only.
 pub async fn list_collection_items(
     Path(collection_id): Path<String>,
+    Query(query): Query<ListQuery>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ItemCollection>, ApiError> {
     if state
@@ -993,15 +1021,22 @@ pub async fn list_collection_items(
     {
         return Err(ApiError::NotFound(collection_id));
     }
-    let (items, matched) = state
-        .store
-        .search_items(&[collection_id], &Search::default())
-        .await?;
-    let returned = items.len() as u64;
-    let mut collection =
-        ItemCollection::new(items).map_err(|e| ApiError::Internal(e.to_string()))?;
-    collection.number_matched = Some(matched);
-    collection.number_returned = Some(returned);
+    let mut collection = items_page(&state, std::slice::from_ref(&collection_id), &query).await?;
+    let offset = query
+        .token
+        .as_deref()
+        .and_then(|t| t.parse::<u64>().ok())
+        .unwrap_or(0);
+    let limit = query.limit.unwrap_or(DEFAULT_LIST_LIMIT);
+    if let Some(next) = items_next_link(
+        &state,
+        &format!("/collections/{collection_id}/items"),
+        limit,
+        offset,
+        &collection,
+    ) {
+        collection.links.push(next);
+    }
     Ok(Json(collection))
 }
 
@@ -1065,19 +1100,75 @@ fn validate_item_collection(
 
 pub async fn list_scoped_items(
     Path((catalog_id, collection_id)): Path<(String, String)>,
+    Query(query): Query<ListQuery>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ItemCollection>, ApiError> {
     require_scoped_collection(&state, &catalog_id, &collection_id).await?;
-    let (items, matched) = state
-        .store
-        .search_items(&[collection_id], &Search::default())
-        .await?;
+    let mut collection = items_page(&state, std::slice::from_ref(&collection_id), &query).await?;
+    let offset = query
+        .token
+        .as_deref()
+        .and_then(|t| t.parse::<u64>().ok())
+        .unwrap_or(0);
+    let limit = query.limit.unwrap_or(DEFAULT_LIST_LIMIT);
+    if let Some(next) = items_next_link(
+        &state,
+        &format!("/catalogs/{catalog_id}/collections/{collection_id}/items"),
+        limit,
+        offset,
+        &collection,
+    ) {
+        collection.links.push(next);
+    }
+    Ok(Json(collection))
+}
+
+/// Shared items-listing pipeline: `?limit=&token=` -> paginated search.
+async fn items_page(
+    state: &AppState,
+    collections: &[String],
+    query: &ListQuery,
+) -> Result<ItemCollection, ApiError> {
+    let (limit, offset) = list_window(query)?;
+    let mut search = Search::default();
+    search.items.limit = Some(limit);
+    search
+        .items
+        .additional_fields
+        .insert("offset".to_string(), json!(offset));
+    let (items, matched) = state.store.search_items(collections, &search).await?;
     let returned = items.len() as u64;
     let mut collection =
         ItemCollection::new(items).map_err(|e| ApiError::Internal(e.to_string()))?;
     collection.number_matched = Some(matched);
     collection.number_returned = Some(returned);
-    Ok(Json(collection))
+    Ok(collection)
+}
+
+/// `next` link for a paged items listing (GET href with limit+token).
+fn items_next_link(
+    state: &AppState,
+    path: &str,
+    limit: u64,
+    offset: u64,
+    collection: &ItemCollection,
+) -> Option<Link> {
+    let returned = collection.number_returned.unwrap_or(0);
+    let matched = collection.number_matched.unwrap_or(0);
+    if offset + returned >= matched {
+        return None;
+    }
+    let mut link = Link::new(
+        format!(
+            "{}{path}?limit={}&token={}",
+            state.base_url,
+            limit,
+            offset + limit
+        ),
+        "next",
+    );
+    link.r#type = Some("application/geo+json".to_string());
+    Some(link)
 }
 
 pub async fn get_scoped_item(

@@ -15,7 +15,7 @@ mod common;
 use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
-use stac_multitenant_server::store::ROOT_CATALOG_ID;
+use sfeos_rs::store::ROOT_CATALOG_ID;
 
 // Convenience wrappers
 

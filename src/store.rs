@@ -579,12 +579,16 @@ fn sort_field(field: &str) -> String {
 
 /// Page offset — `offset` isn't a modeled `Search` field, it arrives via
 /// `additional_fields` (same trick stac-server's duckdb backend uses).
+/// POST bodies carry it as a number; GET query params arrive as strings.
 pub fn search_offset(search: &Search) -> u64 {
     search
         .items
         .additional_fields
         .get("offset")
-        .and_then(Value::as_u64)
+        .and_then(|v| {
+            v.as_u64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        })
         .unwrap_or(0)
 }
 

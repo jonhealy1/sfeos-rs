@@ -145,7 +145,7 @@ This is a prototype — the endpoints exist but several are shallow. Known gaps:
 - `collections`, `ids`, `bbox`, `intersects`, `datetime`, `sortby`, and `limit` are translated to OpenSearch queries — `fields` and `query` are parsed but ignored
 - `datetime` bounds must be full RFC3339 datetimes — date-only inputs (`2023-06-01`) are rejected at validation
 - No CQL2 / filter extension support
-- Offset pagination exists: `{"offset": n}` in the search body + `next`/`prev` links (`method: POST`, `body`) in responses; items listings use `?limit=&token=`. Deep paging (>10k) needs `search_after`/cursor — not implemented
+- Offset pagination exists: `{"offset": n}` in the POST body or `?offset=` on GET + `next`/`prev` links (`method: POST`, `body`) in search responses; items listings use `?limit=&token=` with `method: GET` `next` links. All paged responses include `numberMatched`/`numberReturned`. Deep paging (>10k) needs `search_after`/cursor — not implemented
 
 **Core STAC routes**
 - `GET /queryables` endpoints (root + per-collection) — not implemented

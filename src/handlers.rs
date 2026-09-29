@@ -7,7 +7,7 @@ use crate::store::{
 };
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -30,6 +30,11 @@ pub struct AppState {
 
 /// Default page size for catalog/collection/children list endpoints.
 const DEFAULT_LIST_LIMIT: u64 = 10;
+
+/// STAC requires `application/geo+json` on Item and ItemCollection payloads.
+fn geo_json<T: serde::Serialize>(body: T) -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "application/geo+json")], Json(body))
+}
 
 #[derive(Deserialize, Default)]
 pub struct ChildrenQuery {
@@ -130,6 +135,34 @@ fn link_json(href: String, rel: &str) -> Link {
     link
 }
 
+/// Dynamic links for an Item: `self`/`parent`/`collection`/`root`.
+/// `self` and `parent` are scoped paths when a catalog scope is given,
+/// canonical `/collections` paths otherwise.
+fn item_links(
+    state: &AppState,
+    item_id: &str,
+    collection_id: &str,
+    scoped_catalog_id: Option<&str>,
+) -> Vec<Link> {
+    let base = &state.base_url;
+    let (col_href, self_href) = match scoped_catalog_id {
+        Some(cat) => (
+            format!("{base}/catalogs/{cat}/collections/{collection_id}"),
+            format!("{base}/catalogs/{cat}/collections/{collection_id}/items/{item_id}"),
+        ),
+        None => (
+            format!("{base}/collections/{collection_id}"),
+            format!("{base}/collections/{collection_id}/items/{item_id}"),
+        ),
+    };
+    vec![
+        link_json(self_href, "self"),
+        link_json(col_href, "parent"),
+        link_json(format!("{base}/collections/{collection_id}"), "collection"),
+        link_json(format!("{base}/"), "root"),
+    ]
+}
+
 /// STAC links for a catalog: one `parent` link per non-root parent
 /// (upstream convention for poly-hierarchy); a root-level catalog gets a
 /// single `parent` pointing at the landing page. Links are derived from
@@ -194,6 +227,7 @@ fn global_collection_links(state: &AppState, collection_id: &str, parents: &[Str
     let mut links = vec![
         link_json(format!("{base}/collections/{collection_id}"), "self"),
         link_json(base.clone(), "root"),
+        link_json(format!("{base}/collections/{collection_id}/items"), "items"),
     ];
     let mut real: Vec<&str> = parents
         .iter()
@@ -272,9 +306,13 @@ async fn collection_doc(
 
 // --- Discovery Handlers ---
 
-pub async fn root_landing_page(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+fn conformance_classes(state: &AppState) -> Vec<&'static str> {
     let mut conforms_to = vec![
         "https://api.stacspec.org/v1.0.0/core",
+        "https://api.stacspec.org/v1.0.0/browseable",
+        "https://api.stacspec.org/v1.0.0/ogcapi-features",
+        "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core",
+        "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/geojson",
         "https://api.stacspec.org/v1.0.0/item-search",
         "https://api.stacspec.org/v1.1.0/item-search#sort",
         "https://api.stacspec.org/v1.1.0/item-search#sortables",
@@ -287,19 +325,90 @@ pub async fn root_landing_page(State(state): State<Arc<AppState>>) -> Json<serde
         conforms_to.push("https://api.stacspec.org/v1.0.0/multi-tenant-catalogs/transaction");
         conforms_to.push("https://api.stacspec.org/v1.0.0/ogcapi-features/extensions/transaction");
     }
-    Json(json!({
+    conforms_to
+}
+
+/// GET /conformance — OGC API conformance classes for the whole service.
+pub async fn conformance(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    Json(json!({ "conformsTo": conformance_classes(&state) }))
+}
+
+/// GET /api — OpenAPI service description (hand-maintained).
+pub async fn api() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            "application/vnd.oai.openapi+json;version=3.0",
+        )],
+        include_str!("openapi.json"),
+    )
+}
+
+pub async fn root_landing_page(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let base = &state.base_url;
+    let mut links = json!([
+        { "rel": "self", "type": "application/json", "href": format!("{base}/") },
+        { "rel": "root", "type": "application/json", "href": format!("{base}/") },
+        { "rel": "conformance", "type": "application/json", "href": format!("{base}/conformance") },
+        { "rel": "service-desc", "type": "application/vnd.oai.openapi+json;version=3.0", "href": format!("{base}/api") },
+        { "rel": "data", "type": "application/json", "href": format!("{base}/collections") },
+        { "rel": "search", "type": "application/geo+json", "href": format!("{base}/search") },
+        { "rel": "http://www.opengis.net/def/rel/ogc/1.0/sortables", "type": "application/schema+json", "href": format!("{base}/sortables"), "title": "Sortables" },
+        { "rel": "catalogs", "type": "application/json", "href": format!("{base}/catalogs"), "title": "Multi-Tenant Catalogs Registry" }
+    ]);
+    // Browseable: a child link per root-level node (collections resolve
+    // on the canonical /collections surface). Nodes without a backing
+    // document are skipped rather than emitting 404 links.
+    let children = state.store.get_child_nodes(ROOT_CATALOG_ID, None).await?;
+    let cat_ids: Vec<String> = children
+        .iter()
+        .filter(|n| n.kind == NodeKind::Catalog)
+        .map(|n| n.id.clone())
+        .collect();
+    let col_ids: Vec<String> = children
+        .iter()
+        .filter(|n| n.kind == NodeKind::Collection)
+        .map(|n| n.id.clone())
+        .collect();
+    let mut live: Vec<String> = state
+        .store
+        .get_documents(CATALOGS_INDEX, &cat_ids)
+        .await?
+        .into_iter()
+        .chain(
+            state
+                .store
+                .get_documents(COLLECTIONS_INDEX, &col_ids)
+                .await?,
+        )
+        .filter_map(|d| d["id"].as_str().map(str::to_owned))
+        .collect();
+    live.sort_unstable();
+    for child in children {
+        if !live.contains(&child.id) {
+            continue;
+        }
+        let href = match child.kind {
+            NodeKind::Collection => format!("{base}/collections/{}", child.id),
+            _ => format!("{base}/catalogs/{}", child.id),
+        };
+        links.as_array_mut().unwrap().push(json!({
+            "rel": "child",
+            "type": "application/json",
+            "href": href
+        }));
+    }
+    Ok(Json(json!({
         "stac_version": "1.0.0",
         "type": "Catalog",
         "id": "stac-multi-tenant-root",
         "title": "STAC API with Multi-Tenant Catalogs",
-        "conformsTo": conforms_to,
-        "links": [
-            { "rel": "self", "type": "application/json", "href": "http://localhost:3000/" },
-            { "rel": "data", "type": "application/json", "href": "http://localhost:3000/collections" },
-            { "rel": "http://www.opengis.net/def/rel/ogc/1.0/sortables", "type": "application/schema+json", "href": "http://localhost:3000/sortables", "title": "Sortables" },
-            { "rel": "catalogs", "type": "application/json", "href": "http://localhost:3000/catalogs", "title": "Multi-Tenant Catalogs Registry" }
-        ]
-    }))
+        "description": "Multi-tenant STAC API backed by OpenSearch. Root catalog of the registry.",
+        "conformsTo": conformance_classes(&state),
+        "links": links
+    })))
 }
 
 pub async fn list_catalogs(
@@ -580,20 +689,7 @@ pub async fn catalog_conformance(
     State(state): State<Arc<AppState>>,
 ) -> Result<impl IntoResponse, ApiError> {
     require_catalog(&state, &catalog_id).await?;
-    let mut conforms_to = vec![
-        "https://api.stacspec.org/v1.0.0/core",
-        "https://api.stacspec.org/v1.0.0/item-search",
-        "https://api.stacspec.org/v1.1.0/item-search#sort",
-        "https://api.stacspec.org/v1.1.0/item-search#sortables",
-        "https://api.stacspec.org/v1.0.0/multi-tenant-catalogs",
-        "https://api.stacspec.org/v1.0.0/multi-tenant-catalogs/search",
-        "https://api.stacspec.org/v1.0.0/children",
-        "https://api.stacspec.org/v1.0.0/children#type-filter",
-    ];
-    if state.enable_transactions {
-        conforms_to.push("https://api.stacspec.org/v1.0.0/multi-tenant-catalogs/transaction");
-    }
-    Ok(Json(json!({ "conformsTo": conforms_to })))
+    Ok(Json(json!({ "conformsTo": conformance_classes(&state) })))
 }
 
 // --- Scoped Item Search ---
@@ -604,7 +700,7 @@ async fn run_scoped_search(
     state: &AppState,
     scope_id: &str,
     mut search: Search,
-) -> Result<Json<ItemCollection>, ApiError> {
+) -> Result<impl IntoResponse, ApiError> {
     // Spec-level validation: bbox/intersects mutual exclusion, bbox
     // ordering, and datetime parsing (full RFC3339 — date-only bounds
     // are rejected by the crate).
@@ -617,7 +713,7 @@ async fn run_scoped_search(
     // 1. Resolve all descendant collection IDs in the scope's DAG
     let allowed_collections = state.store.get_descendant_collections(scope_id).await?;
     if allowed_collections.is_empty() {
-        return Ok(Json(empty()?));
+        return Ok(geo_json(empty()?));
     }
 
     // 2. Security & Intersection: Enforce scope boundaries on search payload
@@ -630,20 +726,32 @@ async fn run_scoped_search(
             .collections
             .retain(|c| allowed_collections.contains(c));
         if search.collections.is_empty() {
-            return Ok(Json(empty()?));
+            return Ok(geo_json(empty()?));
         }
     }
 
     // 3. Query OpenSearch — collections scope + bbox/datetime/intersects/ids
-    let (items, matched) = state
+    let (mut items, matched) = state
         .store
         .search_items(&search.collections, &search)
         .await?;
+    let base = &state.base_url;
+    let link_scope = (scope_id != ROOT_CATALOG_ID).then_some(scope_id);
+    for item in items.iter_mut() {
+        let item_id = item["id"].as_str().unwrap_or_default().to_string();
+        if let Some(col) = item["collection"].as_str().map(str::to_owned) {
+            item.insert(
+                "links".to_string(),
+                json!(item_links(state, &item_id, &col, link_scope)),
+            );
+        }
+    }
     let returned = items.len() as u64;
     let mut collection =
         ItemCollection::new(items).map_err(|e| ApiError::Internal(e.to_string()))?;
     collection.number_matched = Some(matched);
     collection.number_returned = Some(returned);
+    collection.links.push(link_json(format!("{base}/"), "root"));
 
     // 4. Offset pagination links (STAC pagination: method+body on the link).
     let limit = search
@@ -657,6 +765,7 @@ async fn run_scoped_search(
     } else {
         format!("{}/catalogs/{scope_id}/search", state.base_url)
     };
+    collection.links.push(link_json(href.clone(), "self"));
     if offset + returned < matched {
         collection
             .links
@@ -670,7 +779,7 @@ async fn run_scoped_search(
             offset.saturating_sub(limit),
         ));
     }
-    Ok(Json(collection))
+    Ok(geo_json(collection))
 }
 
 /// A STAC pagination link: rel + href + `method: POST` + the original
@@ -689,7 +798,7 @@ pub async fn scoped_search_post(
     Path(catalog_id): Path<String>,
     State(state): State<Arc<AppState>>,
     Json(search): Json<Search>,
-) -> Result<Json<ItemCollection>, ApiError> {
+) -> Result<impl IntoResponse, ApiError> {
     run_scoped_search(&state, &catalog_id, search).await
 }
 
@@ -697,7 +806,7 @@ pub async fn scoped_search_get(
     Path(catalog_id): Path<String>,
     State(state): State<Arc<AppState>>,
     Query(params): Query<GetSearch>,
-) -> Result<Json<ItemCollection>, ApiError> {
+) -> Result<impl IntoResponse, ApiError> {
     let search = Search::try_from(params).map_err(|e| ApiError::BadRequest(e.to_string()))?;
     run_scoped_search(&state, &catalog_id, search).await
 }
@@ -707,14 +816,14 @@ pub async fn scoped_search_get(
 pub async fn catalogs_search_post(
     State(state): State<Arc<AppState>>,
     Json(search): Json<Search>,
-) -> Result<Json<ItemCollection>, ApiError> {
+) -> Result<impl IntoResponse, ApiError> {
     run_scoped_search(&state, ROOT_CATALOG_ID, search).await
 }
 
 pub async fn catalogs_search_get(
     State(state): State<Arc<AppState>>,
     Query(params): Query<GetSearch>,
-) -> Result<Json<ItemCollection>, ApiError> {
+) -> Result<impl IntoResponse, ApiError> {
     let search = Search::try_from(params).map_err(|e| ApiError::BadRequest(e.to_string()))?;
     run_scoped_search(&state, ROOT_CATALOG_ID, search).await
 }
@@ -1046,7 +1155,7 @@ pub async fn list_collection_items(
     Path(collection_id): Path<String>,
     Query(query): Query<ListQuery>,
     State(state): State<Arc<AppState>>,
-) -> Result<Json<ItemCollection>, ApiError> {
+) -> Result<impl IntoResponse, ApiError> {
     if state
         .store
         .get_document(COLLECTIONS_INDEX, &collection_id)
@@ -1055,13 +1164,21 @@ pub async fn list_collection_items(
     {
         return Err(ApiError::NotFound(collection_id));
     }
-    let mut collection = items_page(&state, std::slice::from_ref(&collection_id), &query).await?;
+    let mut collection =
+        items_page(&state, std::slice::from_ref(&collection_id), &query, None).await?;
     let offset = query
         .token
         .as_deref()
         .and_then(|t| t.parse::<u64>().ok())
         .unwrap_or(0);
     let limit = query.limit.unwrap_or(DEFAULT_LIST_LIMIT);
+    collection.links.push(link_json(
+        format!("{}/collections/{collection_id}/items", state.base_url),
+        "self",
+    ));
+    collection
+        .links
+        .push(link_json(format!("{}/", state.base_url), "root"));
     if let Some(next) = items_next_link(
         &state,
         &format!("/collections/{collection_id}/items"),
@@ -1071,7 +1188,7 @@ pub async fn list_collection_items(
     ) {
         collection.links.push(next);
     }
-    Ok(Json(collection))
+    Ok(geo_json(collection))
 }
 
 /// GET /collections/{id}/items/{item_id} — global item read.
@@ -1088,7 +1205,10 @@ pub async fn get_collection_item(
         return Err(ApiError::NotFound(collection_id));
     }
     match state.store.get_document(ITEMS_INDEX, &item_id).await? {
-        Some(doc) if doc["collection"] == collection_id => Ok(Json(doc)),
+        Some(mut doc) if doc["collection"] == collection_id => {
+            doc["links"] = json!(item_links(&state, &item_id, &collection_id, None));
+            Ok(geo_json(doc))
+        }
         _ => Err(ApiError::NotFound(item_id)),
     }
 }
@@ -1136,15 +1256,31 @@ pub async fn list_scoped_items(
     Path((catalog_id, collection_id)): Path<(String, String)>,
     Query(query): Query<ListQuery>,
     State(state): State<Arc<AppState>>,
-) -> Result<Json<ItemCollection>, ApiError> {
+) -> Result<impl IntoResponse, ApiError> {
     require_scoped_collection(&state, &catalog_id, &collection_id).await?;
-    let mut collection = items_page(&state, std::slice::from_ref(&collection_id), &query).await?;
+    let mut collection = items_page(
+        &state,
+        std::slice::from_ref(&collection_id),
+        &query,
+        Some(&catalog_id),
+    )
+    .await?;
     let offset = query
         .token
         .as_deref()
         .and_then(|t| t.parse::<u64>().ok())
         .unwrap_or(0);
     let limit = query.limit.unwrap_or(DEFAULT_LIST_LIMIT);
+    collection.links.push(link_json(
+        format!(
+            "{}/catalogs/{catalog_id}/collections/{collection_id}/items",
+            state.base_url
+        ),
+        "self",
+    ));
+    collection
+        .links
+        .push(link_json(format!("{}/", state.base_url), "root"));
     if let Some(next) = items_next_link(
         &state,
         &format!("/catalogs/{catalog_id}/collections/{collection_id}/items"),
@@ -1154,14 +1290,16 @@ pub async fn list_scoped_items(
     ) {
         collection.links.push(next);
     }
-    Ok(Json(collection))
+    Ok(geo_json(collection))
 }
 
 /// Shared items-listing pipeline: `?limit=&token=` -> paginated search.
+/// `scoped_catalog_id` selects scoped vs canonical item link paths.
 async fn items_page(
     state: &AppState,
     collections: &[String],
     query: &ListQuery,
+    scoped_catalog_id: Option<&str>,
 ) -> Result<ItemCollection, ApiError> {
     let (limit, offset) = list_window(query)?;
     let mut search = Search::default();
@@ -1170,7 +1308,16 @@ async fn items_page(
         .items
         .additional_fields
         .insert("offset".to_string(), json!(offset));
-    let (items, matched) = state.store.search_items(collections, &search).await?;
+    let (mut items, matched) = state.store.search_items(collections, &search).await?;
+    for item in items.iter_mut() {
+        let item_id = item["id"].as_str().unwrap_or_default().to_string();
+        if let Some(col) = item["collection"].as_str().map(str::to_owned) {
+            item.insert(
+                "links".to_string(),
+                json!(item_links(state, &item_id, &col, scoped_catalog_id)),
+            );
+        }
+    }
     let returned = items.len() as u64;
     let mut collection =
         ItemCollection::new(items).map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -1211,7 +1358,15 @@ pub async fn get_scoped_item(
 ) -> Result<impl IntoResponse, ApiError> {
     require_scoped_collection(&state, &catalog_id, &collection_id).await?;
     match state.store.get_document(ITEMS_INDEX, &item_id).await? {
-        Some(doc) if doc["collection"] == collection_id => Ok(Json(doc)),
+        Some(mut doc) if doc["collection"] == collection_id => {
+            doc["links"] = json!(item_links(
+                &state,
+                &item_id,
+                &collection_id,
+                Some(&catalog_id)
+            ));
+            Ok(geo_json(doc))
+        }
         _ => Err(ApiError::NotFound(item_id)),
     }
 }

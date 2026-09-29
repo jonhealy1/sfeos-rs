@@ -18,7 +18,14 @@ pub fn build_app(state: Arc<AppState>) -> Router {
     let mut app = Router::new()
         // --- Global Landing Page ---
         .route("/", get(root_landing_page))
+        .route("/conformance", get(conformance))
+        .route("/api", get(api))
         .route("/sortables", get(sortables))
+        // --- Core STAC item search (registry-wide; same as /catalogs/search) ---
+        .route(
+            "/search",
+            get(catalogs_search_get).post(catalogs_search_post),
+        )
         // --- Core STAC collections routes (global namespace) ---
         .route("/collections", get(list_collections))
         .route("/collections/{collection_id}", get(get_collection))

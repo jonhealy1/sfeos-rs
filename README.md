@@ -32,12 +32,14 @@ When unset, only the read surface is mounted and the landing page `conformsTo` o
 
 | Method | Path | Supports |
 |---|---|---|
-| GET | `/` | Landing page (`conformsTo`, links) |
+| GET | `/` | Landing page (`conformsTo`, `child` links per root node, `search`/`data`/`conformance`/`service-desc` links) |
+| GET | `/conformance` | OGC conformance class URIs |
+| GET | `/api` | OpenAPI service description (`service-desc` link target) |
 | GET | `/sortables` | OGC Sortables schema for `sortby` discovery |
 | GET | `/collections` | `?limit=&token=` paging |
 | GET | `/collections/{collection_id}` | Canonical links (`self`, `parent` per parent, `duplicate`) |
-| GET | `/collections/{collection_id}/items` | `?limit=&token=` paging |
-| GET | `/collections/{collection_id}/items/{item_id}` | — |
+| GET | `/collections/{collection_id}/items` | `?limit=&token=` paging; `application/geo+json`, item `self`/`parent`/`collection`/`root` links |
+| GET | `/collections/{collection_id}/items/{item_id}` | `application/geo+json` |
 | GET | `/catalogs` | `?limit=&token=` paging (default 10) |
 | GET | `/catalogs/{catalog_id}` | Dynamic links (`parent` per parent, `children`, `data`, `search`) |
 | GET | `/catalogs/{catalog_id}/catalogs` | `?limit=&token=` paging |
@@ -45,9 +47,10 @@ When unset, only the read surface is mounted and the landing page `conformsTo` o
 | GET | `/catalogs/{catalog_id}/children` | `?type=Catalog\|Collection` filter, `?limit=&token=` paging |
 | GET | `/catalogs/{catalog_id}/collections` | `?limit=&token=` paging |
 | GET | `/catalogs/{catalog_id}/collections/{collection_id}` | Contextual `self`/`parent`, alt parents as `related`/`duplicate` |
-| GET | `/catalogs/{catalog_id}/collections/{collection_id}/items` | `?limit=&token=` paging |
-| GET | `/catalogs/{catalog_id}/collections/{collection_id}/items/{item_id}` | — |
-| GET/POST | `/catalogs/search` | Whole-registry scope. Filters: `collections`, `ids`, `bbox`, `intersects`, `datetime`, `sortby`, `limit`, `offset` → `next`/`prev` links |
+| GET | `/catalogs/{catalog_id}/collections/{collection_id}/items` | `?limit=&token=` paging; `application/geo+json`, scoped item links |
+| GET | `/catalogs/{catalog_id}/collections/{collection_id}/items/{item_id}` | `application/geo+json` |
+| GET/POST | `/search` | Registry-wide item search (same handler as `/catalogs/search`). Filters: `collections`, `ids`, `bbox`, `intersects`, `datetime`, `sortby`, `limit`, `offset` → `next`/`prev` links |
+| GET/POST | `/catalogs/search` | Whole-registry scope. Same filters as `/search` |
 | GET/POST | `/catalogs/{catalog_id}/search` | Same filters, intersected with the catalog's descendant collections |
 
 GET search takes `bbox`, `datetime`, `ids`, `collections`, `limit`, `sortby` (`+field`/`-field` shorthand) as query params; POST takes the full `Search` body (`intersects` included). `fields`, `query`, and CQL2 `filter` are parsed but not yet applied.
@@ -76,8 +79,6 @@ Status codes: `201` create (Mode A), `200` link (Mode B `{"id": ...}`) / update,
 
 | Method | Path | Status |
 |---|---|---|
-| GET/POST | `/search` | 404 — links already point here |
-| GET | `/conformance` | 404 — catalog-scoped variant exists |
 | GET | `/collections/{id}/sortables` | 404 — root `/sortables` exists |
 | GET | `/collections/{id}/queryables` | 404 |
 | POST | `/catalogs/{id}/bulk` | 404 — bulk transactions extension |
@@ -146,10 +147,10 @@ This is a prototype — the endpoints exist but several are shallow. Known gaps:
 - No CQL2 / filter extension support
 - Offset pagination exists: `{"offset": n}` in the search body + `next`/`prev` links (`method: POST`, `body`) in responses; items listings use `?limit=&token=`. Deep paging (>10k) needs `search_after`/cursor — not implemented
 
-**Core STAC routes** (links already point here — currently dead until implemented)
-- `GET/POST /search`, `/collections`, `/collections/{id}`, `/collections/{id}/items` at the root
-- Item links: items return `links: []` (catalog/collection docs already get DAG-derived links)
-- No `/conformance` page or `/queryables` endpoints
+**Core STAC routes**
+- `GET /queryables` endpoints (root + per-collection) — not implemented
+- `service-doc` (human-readable API docs page) — OpenAPI JSON exists at `/api`; no HTML variant
+- Optimistic concurrency for link/unlink and PUT races (`_seq_no`/`_primary_term`) — see Hierarchy below
 
 **Hierarchy & data**
 - Children/descendants capped at 10k per level — real pagination needed on the DAG itself
@@ -164,4 +165,4 @@ This is a prototype — the endpoints exist but several are shallow. Known gaps:
 - OpenSearch runs single-node with the security plugin disabled — dev only, harden before anything else
 - No auth or per-tenant authorization — catalog scope is organizational only, not a security boundary
 
-**Tests** — `tests/catalogs.rs` ports `stac-fastapi-elasticsearch-opensearch`'s `test_catalogs.py` (103 passing, 17 `#[ignore]`d pending: optimistic concurrency, `stac-validate`, per-child `child` links, root `/collections` routes). Each test gets isolated `it-*` indices (unique `Store` index prefix), so tests never touch dev data — `make test*` sweeps `it-*` afterwards, or `make test-clean` manually.
+**Tests** — `tests/catalogs.rs` ports `stac-fastapi-elasticsearch-opensearch`'s `test_catalogs.py` (103 passing, 17 `#[ignore]`d pending: optimistic concurrency, `stac-validate`, per-child `child` links, user-link merge semantics). CI also runs [`stac-api-validator`](https://github.com/stac-utils/stac-api-validator) (core, item-search, features, browseable — all passing) as an advisory job. Each test gets isolated `it-*` indices (unique `Store` index prefix), so tests never touch dev data — `make test*` sweeps `it-*` afterwards, or `make test-clean` manually.

@@ -1,0 +1,190 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "sfeos-rs — STAC API with Multi-Tenant Catalogs",
+    "description": "STAC API implementing the Multi-Tenant Catalogs extension, backed by OpenSearch. Transaction routes exist only when ENABLE_TRANSACTIONS_EXTENSIONS is set.",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/": {
+      "get": { "summary": "Landing page", "responses": { "200": { "description": "STAC Catalog root with conformsTo and navigation links" } } }
+    },
+    "/conformance": {
+      "get": { "summary": "Conformance classes", "responses": { "200": { "description": "OGC conformance class URIs" } } }
+    },
+    "/search": {
+      "get": {
+        "summary": "Item search (registry-wide)",
+        "parameters": [
+          { "name": "collections", "in": "query", "schema": { "type": "string" } },
+          { "name": "ids", "in": "query", "schema": { "type": "string" } },
+          { "name": "bbox", "in": "query", "schema": { "type": "string" } },
+          { "name": "intersects", "in": "query", "schema": { "type": "string" } },
+          { "name": "datetime", "in": "query", "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer" } },
+          { "name": "offset", "in": "query", "schema": { "type": "integer" } },
+          { "name": "sortby", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "GeoJSON ItemCollection" } }
+      },
+      "post": { "summary": "Item search (registry-wide)", "responses": { "200": { "description": "GeoJSON ItemCollection" } } }
+    },
+    "/collections": {
+      "get": {
+        "summary": "List all collections",
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer" } },
+          { "name": "token", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "Collections list" } }
+      }
+    },
+    "/collections/{collectionId}": {
+      "get": {
+        "summary": "Collection document",
+        "parameters": [{ "name": "collectionId", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "STAC Collection" }, "404": { "description": "Not found" } }
+      }
+    },
+    "/collections/{collectionId}/items": {
+      "get": {
+        "summary": "Collection items",
+        "parameters": [
+          { "name": "collectionId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer" } },
+          { "name": "token", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "GeoJSON ItemCollection" }, "404": { "description": "Not found" } }
+      }
+    },
+    "/collections/{collectionId}/items/{itemId}": {
+      "get": {
+        "summary": "Item document",
+        "parameters": [
+          { "name": "collectionId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "itemId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "STAC Item" }, "404": { "description": "Not found" } }
+      }
+    },
+    "/sortables": {
+      "get": { "summary": "Sortables schema", "responses": { "200": { "description": "JSON Schema of sortable fields" } } }
+    },
+    "/catalogs": {
+      "get": {
+        "summary": "List root-level catalogs",
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer" } },
+          { "name": "token", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "Catalog list" } }
+      },
+      "post": { "summary": "Create root-level catalog (transactions)", "responses": { "201": { "description": "Created" }, "409": { "description": "ID exists" } } }
+    },
+    "/catalogs/{catalogId}": {
+      "get": {
+        "summary": "Catalog document",
+        "parameters": [{ "name": "catalogId", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "STAC Catalog" }, "404": { "description": "Not found" } }
+      },
+      "put": { "summary": "Update catalog (transactions)", "responses": { "200": { "description": "Updated" }, "404": { "description": "Not found" } } },
+      "delete": { "summary": "Disband catalog (transactions, non-cascading)", "responses": { "204": { "description": "Disbanded" }, "404": { "description": "Not found" } } }
+    },
+    "/catalogs/{catalogId}/conformance": {
+      "get": {
+        "summary": "Catalog-scoped conformance",
+        "parameters": [{ "name": "catalogId", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Conformance class URIs" }, "404": { "description": "Not found" } }
+      }
+    },
+    "/catalogs/{catalogId}/children": {
+      "get": {
+        "summary": "Catalog children",
+        "parameters": [
+          { "name": "catalogId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "type", "in": "query", "schema": { "type": "string", "enum": ["Catalog", "Collection"] } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer" } },
+          { "name": "token", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "Child resources" }, "404": { "description": "Not found" } }
+      }
+    },
+    "/catalogs/{catalogId}/catalogs": {
+      "get": {
+        "summary": "Sub-catalogs",
+        "parameters": [
+          { "name": "catalogId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer" } },
+          { "name": "token", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "Catalog list" }, "404": { "description": "Not found" } }
+      },
+      "post": { "summary": "Create or link sub-catalog (transactions: Mode A=create 201, Mode B=link 200/404)", "responses": { "200": { "description": "Linked" }, "201": { "description": "Created" }, "404": { "description": "Target missing" }, "409": { "description": "ID exists" } } }
+    },
+    "/catalogs/{catalogId}/catalogs/{subId}": {
+      "delete": {
+        "summary": "Unlink sub-catalog (transactions, non-cascading)",
+        "responses": { "204": { "description": "Unlinked" }, "404": { "description": "Not found or not a child" } }
+      }
+    },
+    "/catalogs/{catalogId}/collections": {
+      "get": {
+        "summary": "Scoped collections",
+        "parameters": [
+          { "name": "catalogId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer" } },
+          { "name": "token", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "Collections list" }, "404": { "description": "Not found" } }
+      },
+      "post": { "summary": "Create or link collection (transactions: Mode A=create 201, Mode B=link 200/404)", "responses": { "200": { "description": "Linked" }, "201": { "description": "Created" }, "404": { "description": "Target missing" }, "409": { "description": "ID exists" } } }
+    },
+    "/catalogs/{catalogId}/collections/{collectionId}": {
+      "get": {
+        "summary": "Scoped collection document",
+        "parameters": [
+          { "name": "catalogId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "collectionId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "STAC Collection" }, "404": { "description": "Not found" } }
+      },
+      "put": { "summary": "Update collection (transactions)", "responses": { "200": { "description": "Updated" }, "404": { "description": "Not found" } } },
+      "delete": { "summary": "Unlink collection (transactions, non-cascading)", "responses": { "204": { "description": "Unlinked" }, "404": { "description": "Not found or not a child" } } }
+    },
+    "/catalogs/{catalogId}/collections/{collectionId}/items": {
+      "get": {
+        "summary": "Scoped collection items",
+        "parameters": [
+          { "name": "catalogId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "collectionId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer" } },
+          { "name": "token", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "GeoJSON ItemCollection" }, "404": { "description": "Not found" } }
+      },
+      "post": { "summary": "Create item (transactions)", "responses": { "201": { "description": "Created" } } }
+    },
+    "/catalogs/{catalogId}/collections/{collectionId}/items/{itemId}": {
+      "get": {
+        "summary": "Scoped item document",
+        "responses": { "200": { "description": "STAC Item" }, "404": { "description": "Not found" } }
+      },
+      "put": { "summary": "Update item (transactions)", "responses": { "200": { "description": "Updated" } } },
+      "delete": { "summary": "Delete item (transactions)", "responses": { "204": { "description": "Deleted" } } }
+    },
+    "/catalogs/search": {
+      "get": { "summary": "Item search (registry-wide)", "responses": { "200": { "description": "GeoJSON ItemCollection" } } },
+      "post": { "summary": "Item search (registry-wide)", "responses": { "200": { "description": "GeoJSON ItemCollection" } } }
+    },
+    "/catalogs/{catalogId}/search": {
+      "get": {
+        "summary": "Catalog-scoped item search",
+        "parameters": [
+          { "name": "catalogId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "GeoJSON ItemCollection" }, "404": { "description": "Not found" } }
+      },
+      "post": { "summary": "Catalog-scoped item search", "responses": { "200": { "description": "GeoJSON ItemCollection" }, "404": { "description": "Not found" } } }
+    }
+  }
+}

@@ -43,6 +43,7 @@ impl LinkEngine {
             // MUST lock parent link to the contextual path for UI breadcrumbs
             Link::parent(contextual_parent.to_string()).json(),
             Link::new(canonical_url.to_string(), "canonical").json(),
+            Link::new(format!("{scoped_self}/items"), "items").geojson(),
         ];
 
         // Expose alternate poly-hierarchy parents as "related" and "duplicate"

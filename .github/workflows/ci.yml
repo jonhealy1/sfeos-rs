@@ -108,8 +108,10 @@ jobs:
         run: |
           stac-api-validator \
             --root-url http://localhost:3000 \
+            --conformance core \
             --conformance item-search \
             --conformance features \
+            --conformance browseable \
             --collection landsat-c2-l2 \
             --geometry '{"type":"Polygon","coordinates":[[[-123,36],[-119,36],[-119,39],[-123,39],[-123,36]]]}' \
             2>&1 | tee validator-report.txt

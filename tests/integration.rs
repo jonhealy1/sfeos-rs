@@ -4,70 +4,15 @@
 // Tests silently pass (skip) when the cluster is unreachable so plain
 // `cargo test` still works without Docker.
 
-use axum::{
-    body::{to_bytes, Body},
-    http::{Request, StatusCode},
-    Router,
-};
+mod common;
+
+use axum::http::StatusCode;
+use common::*;
 use serde_json::{json, Value};
-use stac_multitenant_server::{build_app, handlers::AppState, links::LinkEngine, store::Store};
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
-use tower::ServiceExt;
+use stac_multitenant_server::build_app;
 
-fn uniq(prefix: &str) -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    format!("{prefix}-{nanos}")
-}
-
-/// None if OpenSearch is unreachable — caller should skip the test.
-async fn test_state(enable_transactions: bool) -> Option<Arc<AppState>> {
-    let url = std::env::var("OPENSEARCH_URL")
-        .unwrap_or_else(|_| "http://localhost:9200".to_string());
-    let store = Store::connect(&url).ok()?;
-    store.ensure_indices().await.ok()?;
-    Some(Arc::new(AppState {
-        base_url: "http://test".to_string(),
-        store,
-        links: LinkEngine::new("http://test"),
-        enable_transactions,
-    }))
-}
-
-async fn call(app: &Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
-    let req = Request::builder()
-        .method(method)
-        .uri(uri)
-        .header("content-type", "application/json")
-        .body(Body::from(body.map(|b| b.to_string()).unwrap_or_default()))
-        .unwrap();
-    let resp = app.clone().oneshot(req).await.unwrap();
-    let status = resp.status();
-    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    let json = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-    (status, json)
-}
-
-fn catalog(id: &str) -> Value {
-    json!({"type": "Catalog", "id": id, "description": "test"})
-}
-
-fn collection(id: &str) -> Value {
-    json!({
-        "type": "Collection",
-        "id": id,
-        "description": "test",
-        "license": "MIT",
-        "extent": {
-            "spatial": {"bbox": [[-180.0, -90.0, 180.0, 90.0]]},
-            "temporal": {"interval": [["2020-01-01T00:00:00Z", null]]}
-        }
-    })
-}
-
+/// Local variant — the shared `item()` sets `collection`; these tests
+/// rely on the handler auto-filling it from the path.
 fn item(id: &str) -> Value {
     json!({
         "type": "Feature",
@@ -196,8 +141,15 @@ async fn test_disband_orphan_adoption() {
     .await;
     call(&app, "DELETE", &format!("/catalogs/{cat}"), None).await;
 
-    // Orphaned collection adopted by root
-    let (s, body) = call(&app, "GET", "/catalogs/root/children?type=Collection", None).await;
+    // Orphaned collection adopted by root (large limit — shared dev
+    // index accumulates children from other tests)
+    let (s, body) = call(
+        &app,
+        "GET",
+        "/catalogs/root/children?type=Collection&limit=10000",
+        None,
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
     let children: Vec<&str> = body["children"]
         .as_array()
@@ -259,16 +211,18 @@ async fn test_scoped_search_intersection() {
     assert_eq!(s, StatusCode::OK);
     assert_eq!(body["numberReturned"], 0);
 
-    // Registry-wide search also finds it (everything is under root)
-    let (s, body) = call(&app, "POST", "/catalogs/search", Some(json!({}))).await;
+    // Registry-wide search also finds it (everything is under root).
+    // Use an ids filter — the shared dev index outgrows the default page.
+    let (s, body) = call(
+        &app,
+        "POST",
+        "/catalogs/search",
+        Some(json!({"ids": [it]})),
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
-    let ids: Vec<&str> = body["features"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|f| f["id"].as_str())
-        .collect();
-    assert!(ids.contains(&it.as_str()));
+    assert_eq!(body["numberMatched"], 1);
+    assert_eq!(body["features"][0]["id"], it);
 }
 
 #[tokio::test]

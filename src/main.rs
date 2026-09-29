@@ -15,15 +15,20 @@ async fn main() {
         .await
         .expect("Failed to create STAC indices");
 
-    let enable_transactions = std::env::var("ENABLE_TRANSACTIONS_EXTENSIONS")
-        .map(|v| matches!(v.to_lowercase().as_str(), "true" | "1" | "yes"))
-        .unwrap_or(false);
+    let env_flag = |name: &str| {
+        std::env::var(name)
+            .map(|v| matches!(v.to_lowercase().as_str(), "true" | "1" | "yes"))
+            .unwrap_or(false)
+    };
+    let enable_transactions = env_flag("ENABLE_TRANSACTIONS_EXTENSIONS");
+    let hide_alternate_parents = env_flag("CATALOGS_HIDE_ALTERNATE_PARENTS");
 
     let state = Arc::new(AppState {
         base_url: base_url.to_string(),
         store,
         links: LinkEngine::new(base_url),
         enable_transactions,
+        hide_alternate_parents,
     });
     let app = build_app(state);
 

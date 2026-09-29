@@ -52,10 +52,11 @@ def post(api: str, path: str, doc: dict) -> int:
 
 def emit(status: int, kind: str, doc_id: str, indent: int) -> bool:
     global FAILED
-    ok = status in (200, 201)
+    # 409 = doc already exists — idempotent re-ingest is fine
+    ok = status in (200, 201, 409)
     if not ok:
         FAILED += 1
-    mark = "ok" if ok else f"FAIL {status}"
+    mark = {409: "exists"}.get(status) or ("ok" if ok else f"FAIL {status}")
     print(f"{'  ' * indent}[{mark}] {kind}: {doc_id}")
     if status == 405:
         print(

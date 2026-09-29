@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  OPENSEARCH_URL: http://localhost:9200
+
+jobs:
+  test:
+    name: fmt + clippy + tests
+    runs-on: ubuntu-latest
+
+    services:
+      opensearch:
+        image: opensearchproject/opensearch:3.8.0
+        env:
+          discovery.type: single-node
+          bootstrap.memory_lock: "true"
+          DISABLE_SECURITY_PLUGIN: "true"
+          OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl -sf http://localhost:9200/_cluster/health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests (unit + integration, real OpenSearch)
+        run: cargo test
+
+      # it-* test indices are per-run isolated; sweep them afterwards
+      # (matches `make test` behavior)
+      - name: Sweep it-* test indices
+        if: always()
+        run: curl -sf -XDELETE '${{ env.OPENSEARCH_URL }}/it-*' || true
+
+  api-validator:
+    name: stac-api-validator (advisory)
+    runs-on: ubuntu-latest
+    # Advisory: reports spec gaps without blocking merges — promote to a
+    # real gate once /conformance + /search land and it goes green.
+    continue-on-error: true
+
+    services:
+      opensearch:
+        image: opensearchproject/opensearch:3.8.0
+        env:
+          discovery.type: single-node
+          bootstrap.memory_lock: "true"
+          DISABLE_SECURITY_PLUGIN: "true"
+          OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl -sf http://localhost:9200/_cluster/health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build API
+        run: cargo build --release
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Start API
+        run: |
+          ENABLE_TRANSACTIONS_EXTENSIONS=true \
+          OPENSEARCH_URL=${{ env.OPENSEARCH_URL }} \
+            ./target/release/sfeos-rs &
+          timeout 30 bash -c 'until curl -sf http://localhost:3000/ > /dev/null; do sleep 1; done'
+
+      - name: Seed sample data
+        run: STAC_API_URL=http://localhost:3000 python3 scripts/ingest_sample_data.py
+
+      - name: Install stac-api-validator
+        run: pip install stac-api-validator
+
+      - name: Run validator against the API
+        run: |
+          stac-api-validator \
+            --root-url http://localhost:3000 \
+            --conformance item-search \
+            --conformance features \
+            --collection landsat-c2-l2 \
+            --geometry '{"type":"Polygon","coordinates":[[[-123,36],[-119,36],[-119,39],[-123,39],[-123,36]]]}' \
+            2>&1 | tee validator-report.txt
+
+      - name: Upload validator report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stac-api-validator-report
+          path: validator-report.txt

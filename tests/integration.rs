@@ -213,13 +213,7 @@ async fn test_scoped_search_intersection() {
 
     // Registry-wide search also finds it (everything is under root).
     // Use an ids filter — the shared dev index outgrows the default page.
-    let (s, body) = call(
-        &app,
-        "POST",
-        "/catalogs/search",
-        Some(json!({"ids": [it]})),
-    )
-    .await;
+    let (s, body) = call(&app, "POST", "/catalogs/search", Some(json!({"ids": [it]}))).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(body["numberMatched"], 1);
     assert_eq!(body["features"][0]["id"], it);
@@ -268,9 +262,7 @@ async fn test_search_bbox_datetime_intersects_ids() {
     let search = |body: Value| {
         let app = app.clone();
         let cat = cat.clone();
-        async move {
-            call(&app, "POST", &format!("/catalogs/{cat}/search"), Some(body)).await
-        }
+        async move { call(&app, "POST", &format!("/catalogs/{cat}/search"), Some(body)).await }
     };
 
     // bbox: only the inside item intersects the SF box
@@ -285,8 +277,7 @@ async fn test_search_bbox_datetime_intersects_ids() {
 
     // datetime interval and instant (full RFC3339 — the crate rejects
     // date-only bounds in valid())
-    let (_, body) =
-        search(json!({"datetime": "2023-06-01T00:00:00Z/2023-07-01T00:00:00Z"})).await;
+    let (_, body) = search(json!({"datetime": "2023-06-01T00:00:00Z/2023-07-01T00:00:00Z"})).await;
     assert_eq!(body["numberMatched"], 1);
     assert_eq!(body["features"][0]["id"], inside);
     let (_, body) = search(json!({"datetime": "2023-08-01T00:00:00Z"})).await;
@@ -345,9 +336,7 @@ async fn test_search_pagination() {
     let search = |body: Value| {
         let app = app.clone();
         let cat = cat.clone();
-        async move {
-            call(&app, "POST", &format!("/catalogs/{cat}/search"), Some(body)).await
-        }
+        async move { call(&app, "POST", &format!("/catalogs/{cat}/search"), Some(body)).await }
     };
 
     // Page 1: 2 of 3, next link carries offset=2 in its POST body
@@ -418,8 +407,7 @@ async fn test_search_sortby() {
         let app = app.clone();
         let cat = cat.clone();
         async move {
-            let (s, b) =
-                call(&app, "POST", &format!("/catalogs/{cat}/search"), Some(body)).await;
+            let (s, b) = call(&app, "POST", &format!("/catalogs/{cat}/search"), Some(body)).await;
             assert_eq!(s, StatusCode::OK);
             b["features"]
                 .as_array()
@@ -435,7 +423,8 @@ async fn test_search_sortby() {
     assert_eq!(asc, vec![ids[1].clone(), ids[2].clone(), ids[0].clone()]);
 
     // descending -> reversed
-    let desc = order(json!({"sortby": [{"field": "properties.datetime", "direction": "desc"}]})).await;
+    let desc =
+        order(json!({"sortby": [{"field": "properties.datetime", "direction": "desc"}]})).await;
     assert_eq!(desc, vec![ids[0].clone(), ids[2].clone(), ids[1].clone()]);
 
     // GET shorthand: ?sortby=-id

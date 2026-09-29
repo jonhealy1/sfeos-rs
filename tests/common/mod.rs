@@ -40,9 +40,7 @@ pub async fn test_state_full(
 ) -> Option<Arc<AppState>> {
     let url =
         std::env::var("OPENSEARCH_URL").unwrap_or_else(|_| "http://localhost:9200".to_string());
-    let store = Store::connect(&url)
-        .ok()?
-        .with_index_prefix(uniq("it"));
+    let store = Store::connect(&url).ok()?.with_index_prefix(uniq("it"));
     store.ensure_indices().await.ok()?;
     Some(Arc::new(AppState {
         base_url: "http://test".to_string(),
@@ -63,7 +61,12 @@ pub async fn test_app_hide_alt() -> Option<(Router, Arc<AppState>)> {
     Some((build_app(state.clone()), state))
 }
 
-pub async fn call(app: &Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+pub async fn call(
+    app: &Router,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
     let req = Request::builder()
         .method(method)
         .uri(uri)
@@ -138,7 +141,11 @@ pub async fn ctx(state: &AppState) -> Ctx {
     let item_id = uniq("ctx-item");
     state
         .store
-        .index_document(COLLECTIONS_INDEX, &collection_id, collection(&collection_id))
+        .index_document(
+            COLLECTIONS_INDEX,
+            &collection_id,
+            collection(&collection_id),
+        )
         .await
         .unwrap();
     state
@@ -178,13 +185,7 @@ pub fn link_rels(doc: &Value) -> Vec<String> {
 pub fn links_by_rel(doc: &Value, rel: &str) -> Vec<Value> {
     doc["links"]
         .as_array()
-        .map(|links| {
-            links
-                .iter()
-                .filter(|l| l["rel"] == rel)
-                .cloned()
-                .collect()
-        })
+        .map(|links| links.iter().filter(|l| l["rel"] == rel).cloned().collect())
         .unwrap_or_default()
 }
 

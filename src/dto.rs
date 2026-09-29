@@ -53,10 +53,9 @@ mod tests {
 
     #[test]
     fn test_mode_a_full_resource() {
-        let payload: CreateOrLinkPayload<Catalog> = serde_json::from_str(
-            r#"{"type":"Catalog","id":"new","description":"A new catalog"}"#,
-        )
-        .unwrap();
+        let payload: CreateOrLinkPayload<Catalog> =
+            serde_json::from_str(r#"{"type":"Catalog","id":"new","description":"A new catalog"}"#)
+                .unwrap();
         match payload {
             CreateOrLinkPayload::FullResource(c) => assert_eq!(c.id, "new"),
             _ => panic!("expected FullResource"),

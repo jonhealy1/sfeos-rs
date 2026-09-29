@@ -4,9 +4,7 @@ use opensearch::{
         transport::{SingleNodeConnectionPool, TransportBuilder},
         StatusCode, Url,
     },
-    indices::{
-        IndicesCreateParts, IndicesDeleteParts, IndicesExistsParts, IndicesPutMappingParts,
-    },
+    indices::{IndicesCreateParts, IndicesDeleteParts, IndicesExistsParts, IndicesPutMappingParts},
     DeleteParts, GetParts, IndexParts, MgetParts, OpenSearch, SearchParts,
 };
 use serde::{Deserialize, Serialize};
@@ -304,8 +302,7 @@ impl Store {
             .into_iter()
             .flatten()
             .filter_map(|hit| {
-                let node: HierarchyNode =
-                    serde_json::from_value(hit["_source"].clone()).ok()?;
+                let node: HierarchyNode = serde_json::from_value(hit["_source"].clone()).ok()?;
                 Some(ChildNode {
                     id: hit["_id"].as_str()?.to_string(),
                     kind: node.kind,
@@ -641,9 +638,7 @@ fn datetime_filter(datetime: &str) -> Value {
     if let Some(s) = start {
         ranged.push(json!({"range": {"properties.end_datetime": {"gte": s}}}));
     }
-    ranged.push(
-        json!({"bool": {"must_not": {"exists": {"field": "properties.datetime"}}}}),
-    );
+    ranged.push(json!({"bool": {"must_not": {"exists": {"field": "properties.datetime"}}}}));
 
     json!({"bool": {"should": [
         {"range": {"properties.datetime": instant_range}},

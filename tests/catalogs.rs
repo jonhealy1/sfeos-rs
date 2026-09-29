@@ -24,33 +24,55 @@ async fn post_catalog(app: &axum::Router, id: &str) -> (StatusCode, Value) {
 }
 
 async fn post_collection(app: &axum::Router, cat: &str, body: Value) -> (StatusCode, Value) {
-    call(app, "POST", &format!("/catalogs/{cat}/collections"), Some(body)).await
+    call(
+        app,
+        "POST",
+        &format!("/catalogs/{cat}/collections"),
+        Some(body),
+    )
+    .await
 }
 
 async fn post_sub_catalog(app: &axum::Router, cat: &str, body: Value) -> (StatusCode, Value) {
-    call(app, "POST", &format!("/catalogs/{cat}/catalogs"), Some(body)).await
+    call(
+        app,
+        "POST",
+        &format!("/catalogs/{cat}/catalogs"),
+        Some(body),
+    )
+    .await
 }
 
 // --- /catalogs list ---
 
 #[tokio::test]
 async fn test_get_root_catalog() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (s, body) = call(&app, "GET", "/catalogs", None).await;
     assert_eq!(s, StatusCode::OK);
     assert!(body["catalogs"].is_array());
     assert!(body["links"].is_array());
-    assert!(body.get("numberReturned").is_some(), "missing numberReturned");
+    assert!(
+        body.get("numberReturned").is_some(),
+        "missing numberReturned"
+    );
     let rels = link_rels(&body);
     for rel in ["self", "root", "parent"] {
-        assert!(rels.contains(&rel.to_string()), "missing rel {rel}: {rels:?}");
+        assert!(
+            rels.contains(&rel.to_string()),
+            "missing rel {rel}: {rels:?}"
+        );
     }
     assert_no_double_slashes(&body);
 }
 
 #[tokio::test]
 async fn test_get_catalogs_list_with_proper_links() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let id = uniq("cat-links");
     let (s, _) = post_catalog(&app, &id).await;
     assert_eq!(s, StatusCode::CREATED);
@@ -74,7 +96,9 @@ async fn test_get_catalogs_list_with_proper_links() {
 
 #[tokio::test]
 async fn test_create_catalog() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let id = uniq("cat-create");
     let (s, body) = post_catalog(&app, &id).await;
     assert_eq!(s, StatusCode::CREATED);
@@ -85,7 +109,9 @@ async fn test_create_catalog() {
 
 #[tokio::test]
 async fn test_update_catalog() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let id = uniq("cat-update");
     let (s, _) = post_catalog(&app, &id).await;
     assert_eq!(s, StatusCode::CREATED);
@@ -105,7 +131,9 @@ async fn test_update_catalog() {
 
 #[tokio::test]
 async fn test_update_nonexistent_catalog() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (s, _) = call(
         &app,
         "PUT",
@@ -118,7 +146,9 @@ async fn test_update_nonexistent_catalog() {
 
 #[tokio::test]
 async fn test_get_catalog() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let id = uniq("cat-get");
     post_catalog(&app, &id).await;
     let (s, body) = call(&app, "GET", &format!("/catalogs/{id}"), None).await;
@@ -129,7 +159,9 @@ async fn test_get_catalog() {
 
 #[tokio::test]
 async fn test_get_nonexistent_catalog() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (s, _) = call(&app, "GET", "/catalogs/nonexistent-catalog", None).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
 }
@@ -138,12 +170,13 @@ async fn test_get_nonexistent_catalog() {
 
 #[tokio::test]
 async fn test_get_catalog_collections() {
-    let Some((app, state)) = test_app(true).await else { return };
+    let Some((app, state)) = test_app(true).await else {
+        return;
+    };
     let ctx = ctx(&state).await;
     let cat = uniq("cat-cols");
     post_catalog(&app, &cat).await;
-    let (s, _) =
-        post_collection(&app, &cat, json!({"id": ctx.collection_id})).await;
+    let (s, _) = post_collection(&app, &cat, json!({"id": ctx.collection_id})).await;
     assert_eq!(s, StatusCode::OK); // Mode B link -> 200
 
     let (s, body) = call(&app, "GET", &format!("/catalogs/{cat}/collections"), None).await;
@@ -161,12 +194,13 @@ async fn test_get_catalog_collections() {
 
 #[tokio::test]
 async fn test_get_catalog_collections_context_fields() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("cat-ctx-fields");
     post_catalog(&app, &cat).await;
     for i in 0..2 {
-        let (s, _) =
-            post_collection(&app, &cat, collection(&uniq(&format!("ctx-col-{i}")))).await;
+        let (s, _) = post_collection(&app, &cat, collection(&uniq(&format!("ctx-col-{i}")))).await;
         assert_eq!(s, StatusCode::CREATED);
     }
     let (s, body) = call(&app, "GET", &format!("/catalogs/{cat}/collections"), None).await;
@@ -178,7 +212,9 @@ async fn test_get_catalog_collections_context_fields() {
 
 #[tokio::test]
 async fn test_get_catalog_collections_pagination() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("cat-col-page");
     post_catalog(&app, &cat).await;
     for i in 0..5 {
@@ -197,7 +233,13 @@ async fn test_get_catalog_collections_pagination() {
     let next = links_by_rel(&page1, "next").pop().unwrap();
     let href = next["href"].as_str().unwrap();
     assert!(href.contains("token="));
-    let token = href.split("token=").nth(1).unwrap().split('&').next().unwrap();
+    let token = href
+        .split("token=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap();
     let (s, page2) = call(
         &app,
         "GET",
@@ -225,7 +267,9 @@ async fn test_get_catalog_collections_pagination() {
 
 #[tokio::test]
 async fn test_get_catalog_collections_nonexistent_catalog() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (s, _) = call(
         &app,
         "GET",
@@ -238,7 +282,9 @@ async fn test_get_catalog_collections_nonexistent_catalog() {
 
 #[tokio::test]
 async fn test_root_catalog_with_multiple_catalogs() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let mut ids = Vec::new();
     for i in 0..3 {
         let id = uniq(&format!("cat-multi-{i}"));
@@ -261,7 +307,9 @@ async fn test_root_catalog_with_multiple_catalogs() {
 
 #[tokio::test]
 async fn test_get_catalog_collection() {
-    let Some((app, state)) = test_app(true).await else { return };
+    let Some((app, state)) = test_app(true).await else {
+        return;
+    };
     let ctx = ctx(&state).await;
     let cat = uniq("cat-get-col");
     post_catalog(&app, &cat).await;
@@ -281,12 +329,17 @@ async fn test_get_catalog_collection() {
 
 #[tokio::test]
 async fn test_get_catalog_collection_nonexistent_catalog() {
-    let Some((app, state)) = test_app(true).await else { return };
+    let Some((app, state)) = test_app(true).await else {
+        return;
+    };
     let ctx = ctx(&state).await;
     let (s, _) = call(
         &app,
         "GET",
-        &format!("/catalogs/nonexistent-catalog/collections/{}", ctx.collection_id),
+        &format!(
+            "/catalogs/nonexistent-catalog/collections/{}",
+            ctx.collection_id
+        ),
         None,
     )
     .await;
@@ -295,7 +348,9 @@ async fn test_get_catalog_collection_nonexistent_catalog() {
 
 #[tokio::test]
 async fn test_get_catalog_collection_nonexistent_collection() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("cat-nocol");
     post_catalog(&app, &cat).await;
     let (s, _) = call(
@@ -310,7 +365,9 @@ async fn test_get_catalog_collection_nonexistent_collection() {
 
 #[tokio::test]
 async fn test_get_catalog_collection_items() {
-    let Some((app, state)) = test_app(true).await else { return };
+    let Some((app, state)) = test_app(true).await else {
+        return;
+    };
     let ctx = ctx(&state).await;
     let cat = uniq("cat-items");
     post_catalog(&app, &cat).await;
@@ -331,7 +388,9 @@ async fn test_get_catalog_collection_items() {
 
 #[tokio::test]
 async fn test_get_catalog_collection_items_nonexistent_catalog() {
-    let Some((app, state)) = test_app(true).await else { return };
+    let Some((app, state)) = test_app(true).await else {
+        return;
+    };
     let ctx = ctx(&state).await;
     let (s, _) = call(
         &app,
@@ -348,7 +407,9 @@ async fn test_get_catalog_collection_items_nonexistent_catalog() {
 
 #[tokio::test]
 async fn test_get_catalog_collection_items_nonexistent_collection() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("cat-noitems");
     post_catalog(&app, &cat).await;
     let (s, _) = call(
@@ -363,7 +424,9 @@ async fn test_get_catalog_collection_items_nonexistent_collection() {
 
 #[tokio::test]
 async fn test_get_catalog_collection_item() {
-    let Some((app, state)) = test_app(true).await else { return };
+    let Some((app, state)) = test_app(true).await else {
+        return;
+    };
     let ctx = ctx(&state).await;
     let cat = uniq("cat-item");
     post_catalog(&app, &cat).await;
@@ -384,7 +447,9 @@ async fn test_get_catalog_collection_item() {
 
 #[tokio::test]
 async fn test_get_catalog_collection_item_nonexistent_catalog() {
-    let Some((app, state)) = test_app(true).await else { return };
+    let Some((app, state)) = test_app(true).await else {
+        return;
+    };
     let ctx = ctx(&state).await;
     let (s, _) = call(
         &app,
@@ -401,7 +466,9 @@ async fn test_get_catalog_collection_item_nonexistent_catalog() {
 
 #[tokio::test]
 async fn test_get_catalog_collection_item_nonexistent_collection() {
-    let Some((app, state)) = test_app(true).await else { return };
+    let Some((app, state)) = test_app(true).await else {
+        return;
+    };
     let ctx = ctx(&state).await;
     let cat = uniq("cat-nocol-item");
     post_catalog(&app, &cat).await;
@@ -420,7 +487,9 @@ async fn test_get_catalog_collection_item_nonexistent_collection() {
 
 #[tokio::test]
 async fn test_get_catalog_collection_item_nonexistent_item() {
-    let Some((app, state)) = test_app(true).await else { return };
+    let Some((app, state)) = test_app(true).await else {
+        return;
+    };
     let ctx = ctx(&state).await;
     let cat = uniq("cat-noitem");
     post_catalog(&app, &cat).await;
@@ -442,7 +511,9 @@ async fn test_get_catalog_collection_item_nonexistent_item() {
 
 #[tokio::test]
 async fn test_catalogs_pagination_limit() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     for i in 0..5 {
         post_catalog(&app, &uniq(&format!("cat-page-{i}"))).await;
     }
@@ -454,7 +525,9 @@ async fn test_catalogs_pagination_limit() {
 
 #[tokio::test]
 async fn test_catalogs_pagination_default_limit() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     for i in 0..15 {
         post_catalog(&app, &uniq(&format!("cat-dpage-{i}"))).await;
     }
@@ -466,14 +539,18 @@ async fn test_catalogs_pagination_default_limit() {
 
 #[tokio::test]
 async fn test_catalogs_pagination_limit_validation() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (s, _) = call(&app, "GET", "/catalogs?limit=0", None).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
 async fn test_catalogs_pagination_token_parameter() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     post_catalog(&app, &uniq("cat-token")).await;
     let (s, body) = call(&app, "GET", "/catalogs?token=invalid_token", None).await;
     assert_eq!(s, StatusCode::OK);
@@ -485,7 +562,9 @@ async fn test_catalogs_pagination_token_parameter() {
 
 #[tokio::test]
 async fn test_create_catalog_collection() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("cat-create-col");
     let mut c = catalog(&cat);
     c["links"] = json!(c["links"]
@@ -513,18 +592,20 @@ async fn test_create_catalog_collection() {
     assert_eq!(s, StatusCode::OK);
     // scoped parent link to the catalog
     let parents = links_by_rel(&body, "parent");
-    assert!(parents
-        .iter()
-        .any(|l| l["href"].as_str().unwrap_or("").ends_with(&format!("/catalogs/{cat}"))));
+    assert!(parents.iter().any(|l| l["href"]
+        .as_str()
+        .unwrap_or("")
+        .ends_with(&format!("/catalogs/{cat}"))));
     assert_eq!(parents[0]["type"], "application/json");
 
     // catalog has children link
     let (s, cat_body) = call(&app, "GET", &format!("/catalogs/{cat}"), None).await;
     assert_eq!(s, StatusCode::OK);
     let children = links_by_rel(&cat_body, "children");
-    assert!(children
-        .iter()
-        .any(|l| l["href"].as_str().unwrap_or("").ends_with(&format!("/catalogs/{cat}/children"))));
+    assert!(children.iter().any(|l| l["href"]
+        .as_str()
+        .unwrap_or("")
+        .ends_with(&format!("/catalogs/{cat}/children"))));
 
     // collection shows up in the catalog's collections
     let (_, cols) = call(&app, "GET", &format!("/catalogs/{cat}/collections"), None).await;
@@ -539,24 +620,23 @@ async fn test_create_catalog_collection() {
 
 #[tokio::test]
 async fn test_create_catalog_collection_nonexistent_catalog() {
-    let Some((app, _)) = test_app(true).await else { return };
-    let (s, _) = post_collection(
-        &app,
-        "nonexistent-catalog",
-        collection(&uniq("orphan-col")),
-    )
-    .await;
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
+    let (s, _) =
+        post_collection(&app, "nonexistent-catalog", collection(&uniq("orphan-col"))).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
 async fn test_link_existing_collection_by_id() {
-    let Some((app, state)) = test_app(true).await else { return };
+    let Some((app, state)) = test_app(true).await else {
+        return;
+    };
     let ctx = ctx(&state).await;
     let cat = uniq("cat-link-col");
     post_catalog(&app, &cat).await;
-    let (s, body) =
-        post_collection(&app, &cat, json!({"id": ctx.collection_id})).await;
+    let (s, body) = post_collection(&app, &cat, json!({"id": ctx.collection_id})).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(body["id"], ctx.collection_id);
     let (s, _) = call(
@@ -571,7 +651,9 @@ async fn test_link_existing_collection_by_id() {
 
 #[tokio::test]
 async fn test_link_nonexistent_collection_by_id() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("cat-link-404");
     post_catalog(&app, &cat).await;
     let (s, _) = post_collection(&app, &cat, json!({"id": uniq("fake-col")})).await;
@@ -580,7 +662,9 @@ async fn test_link_nonexistent_collection_by_id() {
 
 #[tokio::test]
 async fn test_repost_existing_collection_returns_409_and_preserves_content() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("cat-409");
     post_catalog(&app, &cat).await;
     let col = uniq("col-409");
@@ -592,7 +676,13 @@ async fn test_repost_existing_collection_returns_409_and_preserves_content() {
     let (s, _) = post_collection(&app, &cat, repost).await;
     assert_eq!(s, StatusCode::CONFLICT);
 
-    let (s, body) = call(&app, "GET", &format!("/catalogs/{cat}/collections/{col}"), None).await;
+    let (s, body) = call(
+        &app,
+        "GET",
+        &format!("/catalogs/{cat}/collections/{col}"),
+        None,
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(body["description"], "A test collection");
 }
@@ -601,7 +691,9 @@ async fn test_repost_existing_collection_returns_409_and_preserves_content() {
 
 #[tokio::test]
 async fn test_delete_catalog() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let id = uniq("cat-del");
     post_catalog(&app, &id).await;
     let (s, _) = call(&app, "DELETE", &format!("/catalogs/{id}"), None).await;
@@ -612,7 +704,9 @@ async fn test_delete_catalog() {
 
 #[tokio::test]
 async fn test_delete_catalog_with_collection_id_returns_404() {
-    let Some((app, state)) = test_app(true).await else { return };
+    let Some((app, state)) = test_app(true).await else {
+        return;
+    };
     let ctx = ctx(&state).await;
     let (s, _) = call(
         &app,
@@ -626,7 +720,10 @@ async fn test_delete_catalog_with_collection_id_returns_404() {
     let (s, _) = call(
         &app,
         "GET",
-        &format!("/catalogs/{ROOT_CATALOG_ID}/collections/{}", ctx.collection_id),
+        &format!(
+            "/catalogs/{ROOT_CATALOG_ID}/collections/{}",
+            ctx.collection_id
+        ),
         None,
     )
     .await;
@@ -635,7 +732,9 @@ async fn test_delete_catalog_with_collection_id_returns_404() {
 
 #[tokio::test]
 async fn test_create_catalog_with_collection_id_returns_409() {
-    let Some((app, state)) = test_app(true).await else { return };
+    let Some((app, state)) = test_app(true).await else {
+        return;
+    };
     let ctx = ctx(&state).await;
     let (s, _) = post_catalog(&app, &ctx.collection_id).await;
     assert_eq!(s, StatusCode::CONFLICT);
@@ -643,14 +742,10 @@ async fn test_create_catalog_with_collection_id_returns_409() {
 
 #[tokio::test]
 async fn test_delete_nonexistent_catalog_returns_404() {
-    let Some((app, _)) = test_app(true).await else { return };
-    let (s, _) = call(
-        &app,
-        "DELETE",
-        "/catalogs/nonexistent-catalog-xyz",
-        None,
-    )
-    .await;
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
+    let (s, _) = call(&app, "DELETE", "/catalogs/nonexistent-catalog-xyz", None).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
 }
 
@@ -658,7 +753,9 @@ async fn test_delete_nonexistent_catalog_returns_404() {
 
 #[tokio::test]
 async fn test_delete_catalog_no_cascade() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("cat-nocascade");
     post_catalog(&app, &cat).await;
     let col = uniq("col-survives");
@@ -680,7 +777,9 @@ async fn test_delete_catalog_no_cascade() {
 async fn test_delete_catalog_removes_parent_ids_from_collections() {
     // Our DAG lives in stac-hierarchy, not on the doc — equivalent check:
     // after disband, the collection is no longer a descendant of the catalog.
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("cat-unlink-parents");
     post_catalog(&app, &cat).await;
     let col = uniq("col-unlinked");
@@ -695,13 +794,21 @@ async fn test_delete_catalog_removes_parent_ids_from_collections() {
 
 #[tokio::test]
 async fn test_create_catalog_collection_adds_parent_id() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("cat-pid");
     post_catalog(&app, &cat).await;
     let col = uniq("col-pid");
     let (s, _) = post_collection(&app, &cat, collection(&col)).await;
     assert_eq!(s, StatusCode::CREATED);
-    let (s, body) = call(&app, "GET", &format!("/catalogs/{cat}/collections/{col}"), None).await;
+    let (s, body) = call(
+        &app,
+        "GET",
+        &format!("/catalogs/{cat}/collections/{col}"),
+        None,
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
     let parents = links_by_rel(&body, "parent");
     assert!(parents
@@ -711,7 +818,9 @@ async fn test_create_catalog_collection_adds_parent_id() {
 
 #[tokio::test]
 async fn test_update_catalog_collection_preserves_parent_ids() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (cat_a, cat_b) = (uniq("cat-a"), uniq("cat-b"));
     post_catalog(&app, &cat_a).await;
     post_catalog(&app, &cat_b).await;
@@ -744,7 +853,9 @@ async fn test_update_catalog_collection_preserves_parent_ids() {
 
 #[tokio::test]
 async fn test_add_existing_collection_to_catalog() {
-    let Some((app, state)) = test_app(true).await else { return };
+    let Some((app, state)) = test_app(true).await else {
+        return;
+    };
     let ctx = ctx(&state).await;
     let cat = uniq("cat-add-existing");
     post_catalog(&app, &cat).await;
@@ -762,7 +873,9 @@ async fn test_add_existing_collection_to_catalog() {
 
 #[tokio::test]
 async fn test_collection_with_multiple_parent_catalogs() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (cat_a, cat_b) = (uniq("poly-a"), uniq("poly-b"));
     post_catalog(&app, &cat_a).await;
     post_catalog(&app, &cat_b).await;
@@ -784,7 +897,9 @@ async fn test_collection_with_multiple_parent_catalogs() {
 
 #[tokio::test]
 async fn test_get_catalog_collections_uses_parent_ids() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("cat-pids");
     post_catalog(&app, &cat).await;
     for i in 0..3 {
@@ -797,7 +912,9 @@ async fn test_get_catalog_collections_uses_parent_ids() {
 
 #[tokio::test]
 async fn test_delete_collection_from_catalog_single_parent() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("cat-single");
     post_catalog(&app, &cat).await;
     let col = uniq("col-single");
@@ -831,7 +948,9 @@ async fn test_delete_collection_from_catalog_single_parent() {
 
 #[tokio::test]
 async fn test_delete_collection_from_catalog_multiple_parents() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (cat_a, cat_b) = (uniq("mp-a"), uniq("mp-b"));
     post_catalog(&app, &cat_a).await;
     post_catalog(&app, &cat_b).await;
@@ -867,7 +986,9 @@ async fn test_delete_collection_from_catalog_multiple_parents() {
 
 #[tokio::test]
 async fn test_get_collection_not_in_catalog_returns_404() {
-    let Some((app, state)) = test_app(true).await else { return };
+    let Some((app, state)) = test_app(true).await else {
+        return;
+    };
     let ctx = ctx(&state).await;
     let cat = uniq("cat-foreign");
     post_catalog(&app, &cat).await;
@@ -883,7 +1004,9 @@ async fn test_get_collection_not_in_catalog_returns_404() {
 
 #[tokio::test]
 async fn test_delete_collection_not_in_catalog_returns_404() {
-    let Some((app, state)) = test_app(true).await else { return };
+    let Some((app, state)) = test_app(true).await else {
+        return;
+    };
     let ctx = ctx(&state).await;
     let cat = uniq("cat-del-foreign");
     post_catalog(&app, &cat).await;
@@ -903,7 +1026,9 @@ async fn test_catalog_links_contain_all_collections() {}
 
 #[tokio::test]
 async fn test_delete_catalog_orphans_collections() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("cat-orphans");
     post_catalog(&app, &cat).await;
     let col = uniq("col-orphan");
@@ -930,7 +1055,9 @@ async fn test_delete_catalog_orphans_collections() {
 
 #[tokio::test]
 async fn test_delete_catalog_preserves_multi_parent_collections() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (cat_a, cat_b) = (uniq("keep-a"), uniq("keep-b"));
     post_catalog(&app, &cat_a).await;
     post_catalog(&app, &cat_b).await;
@@ -950,12 +1077,20 @@ async fn test_delete_catalog_preserves_multi_parent_collections() {
 
 #[tokio::test]
 async fn test_parent_ids_not_exposed_to_client() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("cat-nopids");
     post_catalog(&app, &cat).await;
     let col = uniq("col-nopids");
     post_collection(&app, &cat, collection(&col)).await;
-    let (_, body) = call(&app, "GET", &format!("/catalogs/{cat}/collections/{col}"), None).await;
+    let (_, body) = call(
+        &app,
+        "GET",
+        &format!("/catalogs/{cat}/collections/{col}"),
+        None,
+    )
+    .await;
     assert!(body.get("parent_ids").is_none(), "parent_ids leaked");
     assert!(body.get("parentIds").is_none(), "parentIds leaked");
 }
@@ -964,7 +1099,9 @@ async fn test_parent_ids_not_exposed_to_client() {
 
 #[tokio::test]
 async fn test_get_catalog_children() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("cat-children");
     post_catalog(&app, &cat).await;
     for i in 0..2 {
@@ -983,9 +1120,15 @@ async fn test_get_catalog_children() {
             assert!(rels.contains(&rel.to_string()), "child missing rel {rel}");
         }
         let self_l = links_by_rel(child, "self").pop().unwrap();
-        assert!(self_l["href"].as_str().unwrap().contains(child["id"].as_str().unwrap()));
+        assert!(self_l["href"]
+            .as_str()
+            .unwrap()
+            .contains(child["id"].as_str().unwrap()));
         let parent_l = links_by_rel(child, "parent").pop().unwrap();
-        assert!(parent_l["href"].as_str().unwrap().ends_with(&format!("/catalogs/{cat}")));
+        assert!(parent_l["href"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("/catalogs/{cat}")));
     }
     let rels = link_rels(&body);
     for rel in ["self", "root", "parent"] {
@@ -995,7 +1138,9 @@ async fn test_get_catalog_children() {
 
 #[tokio::test]
 async fn test_get_catalog_children_type_filter_catalog() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("cat-filter-cat");
     post_catalog(&app, &cat).await;
     post_collection(&app, &cat, collection(&uniq("only-col"))).await;
@@ -1014,7 +1159,9 @@ async fn test_get_catalog_children_type_filter_catalog() {
 
 #[tokio::test]
 async fn test_get_catalog_children_type_filter_collection() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("cat-filter-col");
     post_catalog(&app, &cat).await;
     post_sub_catalog(&app, &cat, catalog(&uniq("sub"))).await;
@@ -1034,20 +1181,18 @@ async fn test_get_catalog_children_type_filter_collection() {
 
 #[tokio::test]
 async fn test_get_catalog_children_nonexistent_catalog() {
-    let Some((app, _)) = test_app(true).await else { return };
-    let (s, _) = call(
-        &app,
-        "GET",
-        "/catalogs/nonexistent-catalog/children",
-        None,
-    )
-    .await;
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
+    let (s, _) = call(&app, "GET", "/catalogs/nonexistent-catalog/children", None).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
 async fn test_get_catalog_children_pagination() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("kids-page");
     post_catalog(&app, &cat).await;
     for i in 0..5 {
@@ -1064,10 +1209,18 @@ async fn test_get_catalog_children_pagination() {
     assert_eq!(page1["children"].as_array().unwrap().len(), 2);
     assert_eq!(page1["numberReturned"], 2);
     assert_eq!(page1["numberMatched"], 5);
-    let next = links_by_rel(&page1, "next").pop().expect("missing next link");
+    let next = links_by_rel(&page1, "next")
+        .pop()
+        .expect("missing next link");
     let href = next["href"].as_str().unwrap();
     assert!(href.contains("token="));
-    let token = href.split("token=").nth(1).unwrap().split('&').next().unwrap();
+    let token = href
+        .split("token=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap();
     let (s, page2) = call(
         &app,
         "GET",
@@ -1084,7 +1237,9 @@ async fn test_get_catalog_children_pagination() {
 
 #[tokio::test]
 async fn test_create_sub_catalog() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let parent = uniq("parent");
     post_catalog(&app, &parent).await;
     let sub = uniq("sub");
@@ -1099,19 +1254,18 @@ async fn test_create_sub_catalog() {
 
 #[tokio::test]
 async fn test_create_sub_catalog_nonexistent_parent() {
-    let Some((app, _)) = test_app(true).await else { return };
-    let (s, _) = post_sub_catalog(
-        &app,
-        "nonexistent-catalog",
-        catalog(&uniq("orphan-sub")),
-    )
-    .await;
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
+    let (s, _) = post_sub_catalog(&app, "nonexistent-catalog", catalog(&uniq("orphan-sub"))).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
 async fn test_link_nonexistent_sub_catalog_by_id_returns_404() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let parent = uniq("parent-link404");
     post_catalog(&app, &parent).await;
     let (s, _) = post_sub_catalog(&app, &parent, json!({"id": uniq("ghost")})).await;
@@ -1120,7 +1274,9 @@ async fn test_link_nonexistent_sub_catalog_by_id_returns_404() {
 
 #[tokio::test]
 async fn test_link_existing_sub_catalog_by_id_returns_200() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (parent, other) = (uniq("parent-a"), uniq("parent-b"));
     post_catalog(&app, &parent).await;
     let sub = uniq("shared-sub");
@@ -1132,7 +1288,9 @@ async fn test_link_existing_sub_catalog_by_id_returns_200() {
 
 #[tokio::test]
 async fn test_repost_existing_sub_catalog_returns_409() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let parent = uniq("parent-409");
     post_catalog(&app, &parent).await;
     let sub = uniq("sub-409");
@@ -1144,7 +1302,9 @@ async fn test_repost_existing_sub_catalog_returns_409() {
 
 #[tokio::test]
 async fn test_get_sub_catalogs() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let parent = uniq("parent-list");
     post_catalog(&app, &parent).await;
     let mut subs = Vec::new();
@@ -1164,7 +1324,9 @@ async fn test_get_sub_catalogs() {
 
 #[tokio::test]
 async fn test_get_sub_catalogs_empty() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let parent = uniq("parent-empty");
     post_catalog(&app, &parent).await;
     let (s, body) = call(&app, "GET", &format!("/catalogs/{parent}/catalogs"), None).await;
@@ -1175,7 +1337,9 @@ async fn test_get_sub_catalogs_empty() {
 
 #[tokio::test]
 async fn test_nested_catalog_hierarchy() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let l1 = uniq("level1");
     let l2 = uniq("level2");
     let l3 = uniq("level3");
@@ -1194,7 +1358,9 @@ async fn test_nested_catalog_hierarchy() {
 
 #[tokio::test]
 async fn test_catalog_children_mixed_catalogs_and_collections() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("mixed");
     post_catalog(&app, &cat).await;
     post_sub_catalog(&app, &cat, catalog(&uniq("mixed-sub"))).await;
@@ -1210,7 +1376,9 @@ async fn test_catalog_children_mixed_catalogs_and_collections() {
 
 #[tokio::test]
 async fn test_catalog_children_type_filter_catalog() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("mixed-filter");
     post_catalog(&app, &cat).await;
     post_sub_catalog(&app, &cat, catalog(&uniq("mf-sub"))).await;
@@ -1230,7 +1398,9 @@ async fn test_catalog_children_type_filter_catalog() {
 
 #[tokio::test]
 async fn test_delete_catalog_with_sub_catalogs_no_cascade() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let parent = uniq("del-parent");
     let sub = uniq("del-sub");
     post_catalog(&app, &parent).await;
@@ -1251,7 +1421,9 @@ async fn test_delete_catalog_with_sub_catalogs_no_cascade() {
 
 #[tokio::test]
 async fn test_catalog_parent_ids_not_exposed() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let parent = uniq("nopids-parent");
     let sub = uniq("nopids-sub");
     post_catalog(&app, &parent).await;
@@ -1263,7 +1435,9 @@ async fn test_catalog_parent_ids_not_exposed() {
 
 #[tokio::test]
 async fn test_delete_sub_catalog_becomes_root_level() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let parent = uniq("unlink-parent");
     let sub = uniq("unlink-sub");
     post_catalog(&app, &parent).await;
@@ -1300,7 +1474,9 @@ async fn test_delete_sub_catalog_becomes_root_level() {
 
 #[tokio::test]
 async fn test_catalog_poly_hierarchy() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (p1, p2) = (uniq("poly-p1"), uniq("poly-p2"));
     let sub = uniq("poly-sub");
     post_catalog(&app, &p1).await;
@@ -1323,7 +1499,9 @@ async fn test_catalog_poly_hierarchy() {
 
 #[tokio::test]
 async fn test_get_sub_catalogs_pagination() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let parent = uniq("sp-page");
     post_catalog(&app, &parent).await;
     for i in 0..5 {
@@ -1339,7 +1517,9 @@ async fn test_get_sub_catalogs_pagination() {
     assert_eq!(s, StatusCode::OK);
     assert_eq!(page1["catalogs"].as_array().unwrap().len(), 2);
     assert_eq!(page1["numberMatched"], 5);
-    let next = links_by_rel(&page1, "next").pop().expect("missing next link");
+    let next = links_by_rel(&page1, "next")
+        .pop()
+        .expect("missing next link");
     let token = next["href"]
         .as_str()
         .unwrap()
@@ -1363,7 +1543,9 @@ async fn test_get_sub_catalogs_pagination() {
 
 #[tokio::test]
 async fn test_get_sub_catalogs_pagination_with_limit() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let parent = uniq("spl-page");
     post_catalog(&app, &parent).await;
     for i in 0..3 {
@@ -1386,18 +1568,27 @@ async fn test_get_sub_catalogs_pagination_with_limit() {
 
 #[tokio::test]
 async fn test_get_catalog_collections_breadcrumb_parent_link() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("breadcrumb");
     post_catalog(&app, &cat).await;
     post_collection(&app, &cat, collection(&uniq("bc-col"))).await;
     let (_, body) = call(&app, "GET", &format!("/catalogs/{cat}/collections"), None).await;
-    let parent = links_by_rel(&body, "parent").pop().expect("missing parent link");
-    assert!(parent["href"].as_str().unwrap().ends_with(&format!("/catalogs/{cat}")));
+    let parent = links_by_rel(&body, "parent")
+        .pop()
+        .expect("missing parent link");
+    assert!(parent["href"]
+        .as_str()
+        .unwrap()
+        .ends_with(&format!("/catalogs/{cat}")));
 }
 
 #[tokio::test]
 async fn test_get_catalog_dynamic_parent_links_single_parent() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let parent = uniq("dyn-parent");
     let child = uniq("dyn-child");
     post_catalog(&app, &parent).await;
@@ -1413,7 +1604,9 @@ async fn test_get_catalog_dynamic_parent_links_single_parent() {
 #[tokio::test]
 async fn test_get_catalog_dynamic_parent_links_poly_hierarchy() {
     // Their convention: one rel=parent link per parent (not parent+related).
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (p1, p2) = (uniq("pp1"), uniq("pp2"));
     let child = uniq("pp-child");
     post_catalog(&app, &p1).await;
@@ -1423,14 +1616,22 @@ async fn test_get_catalog_dynamic_parent_links_poly_hierarchy() {
     let (_, body) = call(&app, "GET", &format!("/catalogs/{child}"), None).await;
     let parents = links_by_rel(&body, "parent");
     let hrefs: Vec<&str> = parents.iter().filter_map(|l| l["href"].as_str()).collect();
-    assert!(hrefs.iter().any(|h| h.contains(&p1)), "missing parent {p1}: {hrefs:?}");
-    assert!(hrefs.iter().any(|h| h.contains(&p2)), "missing parent {p2}: {hrefs:?}");
+    assert!(
+        hrefs.iter().any(|h| h.contains(&p1)),
+        "missing parent {p1}: {hrefs:?}"
+    );
+    assert!(
+        hrefs.iter().any(|h| h.contains(&p2)),
+        "missing parent {p2}: {hrefs:?}"
+    );
 }
 
 #[tokio::test]
 #[ignore = "needs rel=child links on catalog docs"]
 async fn test_get_catalog_dynamic_child_links() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let parent = uniq("childlinks");
     let sub = uniq("cl-sub");
     let col = uniq("cl-col");
@@ -1440,7 +1641,10 @@ async fn test_get_catalog_dynamic_child_links() {
     let (_, body) = call(&app, "GET", &format!("/catalogs/{parent}"), None).await;
     let child_links = links_by_rel(&body, "child");
     assert!(child_links.len() >= 2, "expected >=2 child links");
-    let hrefs: Vec<&str> = child_links.iter().filter_map(|l| l["href"].as_str()).collect();
+    let hrefs: Vec<&str> = child_links
+        .iter()
+        .filter_map(|l| l["href"].as_str())
+        .collect();
     assert!(hrefs.iter().any(|h| h.contains(&sub)));
     assert!(hrefs
         .iter()
@@ -1449,19 +1653,24 @@ async fn test_get_catalog_dynamic_child_links() {
 
 #[tokio::test]
 async fn test_get_catalog_includes_children_endpoint_link() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("has-children-link");
     post_catalog(&app, &cat).await;
     let (_, body) = call(&app, "GET", &format!("/catalogs/{cat}"), None).await;
     let children = links_by_rel(&body, "children");
-    assert!(children
-        .iter()
-        .any(|l| l["href"].as_str().unwrap_or("").ends_with(&format!("/catalogs/{cat}/children"))));
+    assert!(children.iter().any(|l| l["href"]
+        .as_str()
+        .unwrap_or("")
+        .ends_with(&format!("/catalogs/{cat}/children"))));
 }
 
 #[tokio::test]
 async fn test_get_catalog_root_parent_link_for_top_level_catalog() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("toplevel");
     post_catalog(&app, &cat).await;
     let (_, body) = call(&app, "GET", &format!("/catalogs/{cat}"), None).await;
@@ -1491,40 +1700,63 @@ async fn test_get_catalog_mixed_child_types_pagination() {}
 
 #[tokio::test]
 async fn test_collection_serializer_dynamic_parent_links() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("ser-parent");
     let col = uniq("ser-col");
     post_catalog(&app, &cat).await;
     post_collection(&app, &cat, collection(&col)).await;
-    let (_, body) = call(&app, "GET", &format!("/catalogs/{cat}/collections/{col}"), None).await;
+    let (_, body) = call(
+        &app,
+        "GET",
+        &format!("/catalogs/{cat}/collections/{col}"),
+        None,
+    )
+    .await;
     let parents = links_by_rel(&body, "parent");
-    assert!(parents
-        .iter()
-        .any(|l| l["href"].as_str().unwrap_or("").ends_with(&format!("/catalogs/{cat}"))));
+    assert!(parents.iter().any(|l| l["href"]
+        .as_str()
+        .unwrap_or("")
+        .ends_with(&format!("/catalogs/{cat}"))));
 }
 
 #[tokio::test]
 async fn test_collection_serializer_deduplicates_parent_links() {
     // Linking twice must not produce duplicate parent links.
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("dedup");
     let col = uniq("dedup-col");
     post_catalog(&app, &cat).await;
     post_collection(&app, &cat, collection(&col)).await;
     post_collection(&app, &cat, json!({"id": col})).await; // relink — idempotent
-    let (_, body) = call(&app, "GET", &format!("/catalogs/{cat}/collections/{col}"), None).await;
+    let (_, body) = call(
+        &app,
+        "GET",
+        &format!("/catalogs/{cat}/collections/{col}"),
+        None,
+    )
+    .await;
     let parent_hrefs: Vec<String> = links_by_rel(&body, "parent")
         .iter()
         .filter_map(|l| l["href"].as_str())
         .filter(|h| h.ends_with(&format!("/catalogs/{cat}")))
         .map(str::to_string)
         .collect();
-    assert_eq!(parent_hrefs.len(), 1, "duplicate parent links: {parent_hrefs:?}");
+    assert_eq!(
+        parent_hrefs.len(),
+        1,
+        "duplicate parent links: {parent_hrefs:?}"
+    );
 }
 
 #[tokio::test]
 async fn test_collection_serializer_poly_hierarchy_parent_links() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (p1, p2) = (uniq("csp1"), uniq("csp2"));
     let col = uniq("csp-col");
     post_catalog(&app, &p1).await;
@@ -1532,18 +1764,30 @@ async fn test_collection_serializer_poly_hierarchy_parent_links() {
     post_collection(&app, &p1, collection(&col)).await;
     post_collection(&app, &p2, json!({"id": col})).await;
     // scoped via p1: parent=p1; p2 surfaces via related/duplicate links
-    let (_, body) = call(&app, "GET", &format!("/catalogs/{p1}/collections/{col}"), None).await;
+    let (_, body) = call(
+        &app,
+        "GET",
+        &format!("/catalogs/{p1}/collections/{col}"),
+        None,
+    )
+    .await;
     let parents = links_by_rel(&body, "parent");
-    assert!(parents.iter().any(|l| l["href"].as_str().unwrap_or("").ends_with(&format!("/catalogs/{p1}"))));
+    assert!(parents.iter().any(|l| l["href"]
+        .as_str()
+        .unwrap_or("")
+        .ends_with(&format!("/catalogs/{p1}"))));
     let dupes = links_by_rel(&body, "duplicate");
-    assert!(dupes
-        .iter()
-        .any(|l| l["href"].as_str().unwrap_or("").contains(&format!("/catalogs/{p2}/collections/{col}"))));
+    assert!(dupes.iter().any(|l| l["href"]
+        .as_str()
+        .unwrap_or("")
+        .contains(&format!("/catalogs/{p2}/collections/{col}"))));
 }
 
 #[tokio::test]
 async fn test_catalogs_list_includes_parent_links() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     post_catalog(&app, &uniq("listed")).await;
     let (_, body) = call(&app, "GET", "/catalogs", None).await;
     for cat in body["catalogs"].as_array().unwrap() {
@@ -1555,7 +1799,9 @@ async fn test_catalogs_list_includes_parent_links() {
 async fn test_posted_catalog_dynamic_links_not_persisted() {
     // User-supplied self/root links in the POST body must not leak into
     // the stored doc's generated links.
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let id = uniq("dyn-links");
     let mut c = catalog(&id);
     c["links"] = json!([
@@ -1578,7 +1824,9 @@ async fn test_posted_catalog_user_links_are_persisted() {}
 
 #[tokio::test]
 async fn test_subcatalog_list_endpoint_includes_links() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let parent = uniq("sl-links");
     let sub = uniq("sl-sub");
     post_catalog(&app, &parent).await;
@@ -1595,15 +1843,18 @@ async fn test_subcatalog_list_endpoint_includes_links() {
         assert!(rels.contains(&rel.to_string()), "missing {rel}");
     }
     let parents = links_by_rel(entry, "parent");
-    assert!(parents
-        .iter()
-        .any(|l| l["href"].as_str().unwrap_or("").ends_with(&format!("/catalogs/{parent}"))));
+    assert!(parents.iter().any(|l| l["href"]
+        .as_str()
+        .unwrap_or("")
+        .ends_with(&format!("/catalogs/{parent}"))));
 }
 
 #[tokio::test]
 async fn test_subcatalog_list_endpoint_includes_child_links() {
     // catalog entries carry a rel=children link to their children endpoint
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let parent = uniq("slc-parent");
     let sub = uniq("slc-sub");
     post_catalog(&app, &parent).await;
@@ -1622,7 +1873,9 @@ async fn test_subcatalog_list_endpoint_includes_child_links() {
 #[tokio::test]
 async fn test_both_endpoints_return_consistent_links() {
     // links on GET /catalogs/{id} and its entry in GET /catalogs are the same shape
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let id = uniq("consistent");
     post_catalog(&app, &id).await;
     let (_, single) = call(&app, "GET", &format!("/catalogs/{id}"), None).await;
@@ -1643,13 +1896,20 @@ async fn test_both_endpoints_return_consistent_links() {
 
 #[tokio::test]
 async fn test_children_endpoint_catalogs_include_links() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let parent = uniq("kids-linked");
     let sub = uniq("kl-sub");
     post_catalog(&app, &parent).await;
     post_sub_catalog(&app, &parent, catalog(&sub)).await;
     let (_, body) = call(&app, "GET", &format!("/catalogs/{parent}/children"), None).await;
-    let child = body["children"].as_array().unwrap().iter().find(|c| c["id"] == sub).unwrap();
+    let child = body["children"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == sub)
+        .unwrap();
     let rels = link_rels(child);
     for rel in ["self", "root", "parent"] {
         assert!(rels.contains(&rel.to_string()));
@@ -1658,7 +1918,9 @@ async fn test_children_endpoint_catalogs_include_links() {
 
 #[tokio::test]
 async fn test_children_endpoint_mixed_content_with_links() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let parent = uniq("kids-mixed");
     post_catalog(&app, &parent).await;
     post_sub_catalog(&app, &parent, catalog(&uniq("km-sub"))).await;
@@ -1667,21 +1929,33 @@ async fn test_children_endpoint_mixed_content_with_links() {
     for child in body["children"].as_array().unwrap() {
         let rels = link_rels(child);
         for rel in ["self", "root", "parent"] {
-            assert!(rels.contains(&rel.to_string()), "{} missing {rel}", child["id"]);
+            assert!(
+                rels.contains(&rel.to_string()),
+                "{} missing {rel}",
+                child["id"]
+            );
         }
     }
 }
 
 #[tokio::test]
 async fn test_scoped_collection_links_poly_hierarchy() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (p1, p2) = (uniq("scl1"), uniq("scl2"));
     let col = uniq("scl-col");
     post_catalog(&app, &p1).await;
     post_catalog(&app, &p2).await;
     post_collection(&app, &p1, collection(&col)).await;
     post_collection(&app, &p2, json!({"id": col})).await;
-    let (_, body) = call(&app, "GET", &format!("/catalogs/{p1}/collections/{col}"), None).await;
+    let (_, body) = call(
+        &app,
+        "GET",
+        &format!("/catalogs/{p1}/collections/{col}"),
+        None,
+    )
+    .await;
     // self is the scoped URL, parent the context catalog, alternate parent
     // visible via related/duplicate
     let selfs = links_by_rel(&body, "self");
@@ -1690,12 +1964,17 @@ async fn test_scoped_collection_links_poly_hierarchy() {
         .unwrap()
         .ends_with(&format!("/catalogs/{p1}/collections/{col}")));
     let parents = links_by_rel(&body, "parent");
-    assert!(parents.iter().any(|l| l["href"].as_str().unwrap_or("").ends_with(&format!("/catalogs/{p1}"))));
+    assert!(parents.iter().any(|l| l["href"]
+        .as_str()
+        .unwrap_or("")
+        .ends_with(&format!("/catalogs/{p1}"))));
 }
 
 #[tokio::test]
 async fn test_duplicate_links_exclude_current_catalog_context() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let parents: Vec<String> = (0..3).map(|i| uniq(&format!("dxp-{i}"))).collect();
     for p in &parents {
         post_catalog(&app, p).await;
@@ -1729,7 +2008,9 @@ async fn test_duplicate_links_exclude_current_catalog_context() {
 
 #[tokio::test]
 async fn test_catalog_collections_endpoint_excludes_catalogs() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("cols-only");
     post_catalog(&app, &cat).await;
     post_sub_catalog(&app, &cat, catalog(&uniq("not-a-col"))).await;
@@ -1744,7 +2025,9 @@ async fn test_catalog_collections_endpoint_excludes_catalogs() {
 #[tokio::test]
 async fn test_catalogs_list_includes_child_links() {
     // their shape: catalog entries carry rel=child links for each child
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("childlinks-list");
     post_catalog(&app, &cat).await;
     post_collection(&app, &cat, collection(&uniq("cll-col"))).await;
@@ -1762,7 +2045,9 @@ async fn test_catalogs_list_includes_child_links() {
 
 #[tokio::test]
 async fn test_sub_catalogs_list_includes_child_links() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let parent = uniq("sclp");
     let sub = uniq("sclp-sub");
     post_catalog(&app, &parent).await;
@@ -1777,7 +2062,9 @@ async fn test_sub_catalogs_list_includes_child_links() {
 
 #[tokio::test]
 async fn test_catalogs_list_endpoint() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (s, body) = call(&app, "GET", "/catalogs", None).await;
     assert_eq!(s, StatusCode::OK);
     assert!(body["catalogs"].is_array());
@@ -1787,16 +2074,12 @@ async fn test_catalogs_list_endpoint() {
 
 #[tokio::test]
 async fn test_catalog_conformance_endpoint() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("conformance");
     post_catalog(&app, &cat).await;
-    let (s, body) = call(
-        &app,
-        "GET",
-        &format!("/catalogs/{cat}/conformance"),
-        None,
-    )
-    .await;
+    let (s, body) = call(&app, "GET", &format!("/catalogs/{cat}/conformance"), None).await;
     assert_eq!(s, StatusCode::OK);
     let conforms = body["conformsTo"].as_array().unwrap();
     let uris: Vec<&str> = conforms.iter().filter_map(|u| u.as_str()).collect();
@@ -1818,7 +2101,9 @@ async fn test_catalog_conformance_endpoint() {
 async fn test_hide_alternate_parents_suppresses_related_links_on_global_collection() {
     // "Global" read = root scope; the collection is also linked under a
     // catalog, which would normally surface related/duplicate links.
-    let Some((app, _)) = test_app_hide_alt().await else { return };
+    let Some((app, _)) = test_app_hide_alt().await else {
+        return;
+    };
     let cat = uniq("hgp-cat");
     let col = uniq("hgp-col");
     post_catalog(&app, &cat).await;
@@ -1831,14 +2116,22 @@ async fn test_hide_alternate_parents_suppresses_related_links_on_global_collecti
 
 #[tokio::test]
 async fn test_hide_alternate_parents_suppresses_related_links_on_scoped_collection() {
-    let Some((app, _)) = test_app_hide_alt().await else { return };
+    let Some((app, _)) = test_app_hide_alt().await else {
+        return;
+    };
     let (p1, p2) = (uniq("hap1"), uniq("hap2"));
     let col = uniq("hap-col");
     post_catalog(&app, &p1).await;
     post_catalog(&app, &p2).await;
     post_collection(&app, &p1, collection(&col)).await;
     post_collection(&app, &p2, json!({"id": col})).await;
-    let (_, body) = call(&app, "GET", &format!("/catalogs/{p1}/collections/{col}"), None).await;
+    let (_, body) = call(
+        &app,
+        "GET",
+        &format!("/catalogs/{p1}/collections/{col}"),
+        None,
+    )
+    .await;
     assert!(links_by_rel(&body, "related").is_empty());
     assert!(links_by_rel(&body, "duplicate").is_empty());
     assert_eq!(links_by_rel(&body, "parent").len(), 1);
@@ -1846,7 +2139,9 @@ async fn test_hide_alternate_parents_suppresses_related_links_on_scoped_collecti
 
 #[tokio::test]
 async fn test_hide_alternate_parents_suppresses_related_links_on_catalog() {
-    let Some((app, _)) = test_app_hide_alt().await else { return };
+    let Some((app, _)) = test_app_hide_alt().await else {
+        return;
+    };
     let (p1, p2) = (uniq("hcap1"), uniq("hcap2"));
     let sub = uniq("hcap-sub");
     post_catalog(&app, &p1).await;
@@ -1854,13 +2149,19 @@ async fn test_hide_alternate_parents_suppresses_related_links_on_catalog() {
     post_sub_catalog(&app, &p1, catalog(&sub)).await;
     post_sub_catalog(&app, &p2, json!({"id": sub})).await;
     let (_, body) = call(&app, "GET", &format!("/catalogs/{sub}"), None).await;
-    assert_eq!(links_by_rel(&body, "parent").len(), 1, "alternates not hidden");
+    assert_eq!(
+        links_by_rel(&body, "parent").len(),
+        1,
+        "alternates not hidden"
+    );
     assert!(links_by_rel(&body, "related").is_empty());
 }
 
 #[tokio::test]
 async fn test_hide_alternate_parents_false_shows_related_links_on_catalog() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (p1, p2) = (uniq("shp1"), uniq("shp2"));
     let sub = uniq("shp-sub");
     post_catalog(&app, &p1).await;
@@ -1873,14 +2174,22 @@ async fn test_hide_alternate_parents_false_shows_related_links_on_catalog() {
 
 #[tokio::test]
 async fn test_hide_alternate_parents_false_shows_related_links() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (p1, p2) = (uniq("scl1f"), uniq("scl2f"));
     let col = uniq("scl-colf");
     post_catalog(&app, &p1).await;
     post_catalog(&app, &p2).await;
     post_collection(&app, &p1, collection(&col)).await;
     post_collection(&app, &p2, json!({"id": col})).await;
-    let (_, body) = call(&app, "GET", &format!("/catalogs/{p1}/collections/{col}"), None).await;
+    let (_, body) = call(
+        &app,
+        "GET",
+        &format!("/catalogs/{p1}/collections/{col}"),
+        None,
+    )
+    .await;
     assert!(!links_by_rel(&body, "related").is_empty());
     assert!(!links_by_rel(&body, "duplicate").is_empty());
 }
@@ -1909,13 +2218,19 @@ async fn collection_in_two_catalogs(app: &axum::Router) -> (Vec<String>, Value) 
 
 #[tokio::test]
 async fn test_scoped_put_collection_rejects_mismatched_body_id() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (cats, mut doc) = collection_in_two_catalogs(&app).await;
     doc["id"] = json!("some-other-id");
     let (s, _) = call(
         &app,
         "PUT",
-        &format!("/catalogs/{}/collections/{}", cats[0], doc["id"].as_str().unwrap()),
+        &format!(
+            "/catalogs/{}/collections/{}",
+            cats[0],
+            doc["id"].as_str().unwrap()
+        ),
         Some(doc),
     )
     .await;
@@ -1929,7 +2244,9 @@ async fn test_scoped_put_collection_validates_body() {}
 
 #[tokio::test]
 async fn test_scoped_put_collection_updates_and_keeps_memberships() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (cats, mut doc) = collection_in_two_catalogs(&app).await;
     let col_id = doc["id"].as_str().unwrap().to_string();
     doc["title"] = json!("Updated via scoped PUT");
@@ -1970,13 +2287,21 @@ async fn test_unlink_collection_keeps_concurrent_put_metadata() {}
 
 #[tokio::test]
 async fn test_link_collection_twice_does_not_duplicate_parent_ids() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (cats, doc) = collection_in_two_catalogs(&app).await;
     let col_id = doc["id"].as_str().unwrap().to_string();
     let (s, _) = post_collection(&app, &cats[1], json!({"id": col_id})).await;
     assert_eq!(s, StatusCode::OK);
     // still exactly one parent edge per catalog — children show no dupes
-    let (_, body) = call(&app, "GET", &format!("/catalogs/{}/children", cats[1]), None).await;
+    let (_, body) = call(
+        &app,
+        "GET",
+        &format!("/catalogs/{}/children", cats[1]),
+        None,
+    )
+    .await;
     let count = body["children"]
         .as_array()
         .unwrap()
@@ -1988,7 +2313,9 @@ async fn test_link_collection_twice_does_not_duplicate_parent_ids() {
 
 #[tokio::test]
 async fn test_unlink_collection_twice_returns_404() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (cats, doc) = collection_in_two_catalogs(&app).await;
     let col_id = doc["id"].as_str().unwrap().to_string();
     let path = format!("/catalogs/{}/collections/{col_id}", cats[0]);
@@ -2026,7 +2353,9 @@ async fn test_put_catalog_returns_409_when_conflict_retries_exhausted() {}
 
 #[tokio::test]
 async fn test_catalog_transaction_routes_absent_when_transactions_disabled() {
-    let Some((app, _)) = test_app(false).await else { return };
+    let Some((app, _)) = test_app(false).await else {
+        return;
+    };
     // writes 405, reads still work
     let (s, _) = call(&app, "POST", "/catalogs", Some(catalog("x"))).await;
     assert_eq!(s, StatusCode::METHOD_NOT_ALLOWED);
@@ -2036,7 +2365,9 @@ async fn test_catalog_transaction_routes_absent_when_transactions_disabled() {
 
 #[tokio::test]
 async fn test_catalog_transaction_routes_present_by_default() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (s, _) = post_catalog(&app, &uniq("tx-on")).await;
     assert_eq!(s, StatusCode::CREATED);
 }

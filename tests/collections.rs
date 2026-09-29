@@ -7,7 +7,9 @@ use serde_json::json;
 
 #[tokio::test]
 async fn test_list_collections() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("cl-cat");
     call(&app, "POST", "/catalogs", Some(catalog(&cat))).await;
     for i in 0..3 {
@@ -39,7 +41,9 @@ async fn test_list_collections() {
 
 #[tokio::test]
 async fn test_list_collections_pagination() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("clp-cat");
     call(&app, "POST", "/catalogs", Some(catalog(&cat))).await;
     for i in 0..3 {
@@ -55,7 +59,9 @@ async fn test_list_collections_pagination() {
     assert_eq!(s, StatusCode::OK);
     assert_eq!(page1["collections"].as_array().unwrap().len(), 2);
     assert_eq!(page1["numberMatched"], 3);
-    let next = links_by_rel(&page1, "next").pop().expect("missing next link");
+    let next = links_by_rel(&page1, "next")
+        .pop()
+        .expect("missing next link");
     let token = next["href"]
         .as_str()
         .unwrap()
@@ -80,7 +86,9 @@ async fn test_list_collections_pagination() {
 async fn test_get_collection_global_links() {
     // Poly-hierarchy collection read via canonical route: parent link per
     // parent catalog, duplicate links to each scoped path.
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (p1, p2) = (uniq("gl-p1"), uniq("gl-p2"));
     let col = uniq("gl-col");
     for p in [&p1, &p2] {
@@ -111,22 +119,30 @@ async fn test_get_collection_global_links() {
         .ends_with(&format!("/collections/{col}")));
     let parents = links_by_rel(&body, "parent");
     let hrefs: Vec<&str> = parents.iter().filter_map(|l| l["href"].as_str()).collect();
-    assert!(hrefs.iter().any(|h| h.ends_with(&format!("/catalogs/{p1}"))));
-    assert!(hrefs.iter().any(|h| h.ends_with(&format!("/catalogs/{p2}"))));
+    assert!(hrefs
+        .iter()
+        .any(|h| h.ends_with(&format!("/catalogs/{p1}"))));
+    assert!(hrefs
+        .iter()
+        .any(|h| h.ends_with(&format!("/catalogs/{p2}"))));
     let dupes = links_by_rel(&body, "duplicate");
     assert_eq!(dupes.len(), 2);
 }
 
 #[tokio::test]
 async fn test_get_collection_not_found() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (s, _) = call(&app, "GET", "/collections/nonexistent", None).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
 async fn test_collection_items_global_route() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("ci-cat");
     let col = uniq("ci-col");
     let it = uniq("ci-item");
@@ -153,20 +169,16 @@ async fn test_collection_items_global_route() {
     assert_eq!(body["numberMatched"], 1);
     assert_eq!(body["features"][0]["id"], it);
 
-    let (s, body) = call(
-        &app,
-        "GET",
-        &format!("/collections/{col}/items/{it}"),
-        None,
-    )
-    .await;
+    let (s, body) = call(&app, "GET", &format!("/collections/{col}/items/{it}"), None).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(body["id"], it);
 }
 
 #[tokio::test]
 async fn test_collection_items_404s() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (s, _) = call(&app, "GET", "/collections/nope/items", None).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
     let (s, _) = call(&app, "GET", "/collections/nope/items/x", None).await;
@@ -175,7 +187,9 @@ async fn test_collection_items_404s() {
 
 #[tokio::test]
 async fn test_collection_items_pagination() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("ip-cat");
     let col = uniq("ip-col");
     call(&app, "POST", "/catalogs", Some(catalog(&cat))).await;
@@ -195,14 +209,28 @@ async fn test_collection_items_pagination() {
         )
         .await;
     }
-    let (s, page1) = call(&app, "GET", &format!("/collections/{col}/items?limit=2"), None).await;
+    let (s, page1) = call(
+        &app,
+        "GET",
+        &format!("/collections/{col}/items?limit=2"),
+        None,
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(page1["numberReturned"], 2);
     assert_eq!(page1["numberMatched"], 3);
-    let next = links_by_rel(&page1, "next").pop().expect("missing next link");
+    let next = links_by_rel(&page1, "next")
+        .pop()
+        .expect("missing next link");
     let href = next["href"].as_str().unwrap();
     assert!(href.contains("token="));
-    let token = href.split("token=").nth(1).unwrap().split('&').next().unwrap();
+    let token = href
+        .split("token=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap();
     let (s, page2) = call(
         &app,
         "GET",
@@ -216,7 +244,9 @@ async fn test_collection_items_pagination() {
 
 #[tokio::test]
 async fn test_scoped_items_pagination() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let cat = uniq("sip-cat");
     let col = uniq("sip-col");
     call(&app, "POST", "/catalogs", Some(catalog(&cat))).await;
@@ -250,7 +280,9 @@ async fn test_scoped_items_pagination() {
 
 #[tokio::test]
 async fn test_sortables_endpoint() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (s, body) = call(&app, "GET", "/sortables", None).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(body["type"], "object");
@@ -263,7 +295,9 @@ async fn test_sortables_endpoint() {
 
 #[tokio::test]
 async fn test_landing_advertises_sort_and_sortables() {
-    let Some((app, _)) = test_app(true).await else { return };
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
     let (s, body) = call(&app, "GET", "/", None).await;
     assert_eq!(s, StatusCode::OK);
     let conforms: Vec<&str> = body["conformsTo"]
@@ -281,5 +315,8 @@ async fn test_landing_advertises_sort_and_sortables() {
     }
     let sortables = links_by_rel(&body, "http://www.opengis.net/def/rel/ogc/1.0/sortables");
     assert_eq!(sortables.len(), 1);
-    assert!(sortables[0]["href"].as_str().unwrap().ends_with("/sortables"));
+    assert!(sortables[0]["href"]
+        .as_str()
+        .unwrap()
+        .ends_with("/sortables"));
 }

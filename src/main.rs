@@ -32,9 +32,7 @@ async fn main() {
     });
     let app = build_app(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     println!("sfeos-rs API running on http://localhost:3000");
     if enable_transactions {
         println!("Transaction extension ENABLED (ENABLE_TRANSACTIONS_EXTENSIONS)");

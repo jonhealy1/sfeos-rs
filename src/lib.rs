@@ -34,7 +34,10 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .route("/catalogs", get(list_catalogs))
         .route("/catalogs/{catalog_id}", get(get_catalog))
         .route("/catalogs/{catalog_id}/catalogs", get(list_sub_catalogs))
-        .route("/catalogs/{catalog_id}/conformance", get(catalog_conformance))
+        .route(
+            "/catalogs/{catalog_id}/conformance",
+            get(catalog_conformance),
+        )
         // --- Children & Sub-Resources ---
         .route("/catalogs/{catalog_id}/children", get(get_catalog_children))
         // --- Scoped Collections & Items ---

@@ -1,4 +1,4 @@
-# stac-rust-catalogs-server
+# sfeos-rs
 
 ![StacLabs](https://github.com/StacLabs/.github/raw/main/profile/staclabs-orange-banner.png)
 

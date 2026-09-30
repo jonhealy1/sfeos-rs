@@ -320,3 +320,159 @@ async fn test_landing_advertises_sort_and_sortables() {
         .unwrap()
         .ends_with("/sortables"));
 }
+
+// --- Core transaction routes (canonical /collections surface) ---
+
+#[tokio::test]
+async fn test_core_collection_crud() {
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
+    let col = uniq("core-col");
+    // POST /collections creates under root
+    let (s, body) = call(&app, "POST", "/collections", Some(collection(&col))).await;
+    assert_eq!(s, StatusCode::CREATED);
+    assert!(body["links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|l| l["rel"] == "self"));
+
+    // repost -> 409
+    let (s, _) = call(&app, "POST", "/collections", Some(collection(&col))).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+
+    // PUT update
+    let mut updated = collection(&col);
+    updated["title"] = json!("Renamed");
+    let (s, body) = call(&app, "PUT", &format!("/collections/{col}"), Some(updated)).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(body["title"], "Renamed");
+
+    // PUT id mismatch -> 400; missing -> 404
+    let (s, _) = call(
+        &app,
+        "PUT",
+        &format!("/collections/{col}"),
+        Some(collection("different-id")),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let (s, _) = call(&app, "PUT", "/collections/nope", Some(collection("nope"))).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+
+    // DELETE -> 204, then 404
+    let (s, _) = call(&app, "DELETE", &format!("/collections/{col}"), None).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (s, _) = call(&app, "GET", &format!("/collections/{col}"), None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_core_item_crud() {
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
+    let col = uniq("ci-col");
+    let it = uniq("ci-item");
+    call(&app, "POST", "/collections", Some(collection(&col))).await;
+
+    // item create -> 201 with links + geo+json content type
+    let (s, body) = call(
+        &app,
+        "POST",
+        &format!("/collections/{col}/items"),
+        Some(item(&it, &col)),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED);
+    assert!(body["links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|l| l["rel"] == "self"));
+
+    // repost same item id -> 409
+    let (s, _) = call(
+        &app,
+        "POST",
+        &format!("/collections/{col}/items"),
+        Some(item(&it, &col)),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CONFLICT);
+
+    // GET via canonical route
+    let (s, body) = call(&app, "GET", &format!("/collections/{col}/items/{it}"), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(body["id"], it);
+
+    // PUT update
+    let mut upd = item(&it, &col);
+    upd["properties"]["datetime"] = json!("2024-01-01T00:00:00Z");
+    let (s, _) = call(
+        &app,
+        "PUT",
+        &format!("/collections/{col}/items/{it}"),
+        Some(upd),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+
+    // PUT missing item -> 404; item in wrong collection -> 404
+    let (s, _) = call(
+        &app,
+        "PUT",
+        &format!("/collections/{col}/items/ghost"),
+        Some(item("ghost", &col)),
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+
+    // POST item to missing collection -> 404
+    let (s, _) = call(
+        &app,
+        "POST",
+        "/collections/nope/items",
+        Some(item(&uniq("orph"), "nope")),
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+
+    // DELETE -> 204 then 404
+    let (s, _) = call(
+        &app,
+        "DELETE",
+        &format!("/collections/{col}/items/{it}"),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (s, _) = call(&app, "GET", &format!("/collections/{col}/items/{it}"), None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_delete_collection_removes_items() {
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
+    let col = uniq("dc-col");
+    let it = uniq("dc-item");
+    call(&app, "POST", "/collections", Some(collection(&col))).await;
+    call(
+        &app,
+        "POST",
+        &format!("/collections/{col}/items"),
+        Some(item(&it, &col)),
+    )
+    .await;
+
+    let (s, _) = call(&app, "DELETE", &format!("/collections/{col}"), None).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+
+    // Collection deletion cascades to its items
+    let (s, body) = call(&app, "POST", "/search", Some(json!({"ids": [it]}))).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(body["numberMatched"], 0);
+}

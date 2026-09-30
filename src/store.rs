@@ -5,7 +5,7 @@ use opensearch::{
         StatusCode, Url,
     },
     indices::{IndicesCreateParts, IndicesDeleteParts, IndicesExistsParts, IndicesPutMappingParts},
-    DeleteParts, GetParts, IndexParts, MgetParts, OpenSearch, SearchParts,
+    DeleteByQueryParts, DeleteParts, GetParts, IndexParts, MgetParts, OpenSearch, SearchParts,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -427,6 +427,21 @@ impl Store {
         self.client
             .delete(DeleteParts::IndexId(&index, id))
             .refresh(opensearch::params::Refresh::WaitFor)
+            .send()
+            .await?;
+        Ok(())
+    }
+
+    /// Delete all items belonging to a collection (collection teardown).
+    pub async fn delete_items_by_collection(
+        &self,
+        collection_id: &str,
+    ) -> Result<(), opensearch::Error> {
+        let index = self.idx(ITEMS_INDEX);
+        self.client
+            .delete_by_query(DeleteByQueryParts::Index(&[&index]))
+            .body(json!({"query": {"term": {"collection": collection_id}}}))
+            .refresh(true)
             .send()
             .await?;
         Ok(())

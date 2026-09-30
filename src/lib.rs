@@ -80,6 +80,19 @@ pub fn build_app(state: Arc<AppState>) -> Router {
     if state.enable_transactions {
         app = app.merge(
             Router::new()
+                // Core transaction routes (STAC Transaction extension /
+                // OGC API Features Part-4 style) on the canonical surface
+                .route("/collections", post(create_root_collection))
+                .route(
+                    "/collections/{collection_id}",
+                    put(update_root_collection).delete(delete_root_collection),
+                )
+                .route("/collections/{collection_id}/items", post(create_root_item))
+                .route(
+                    "/collections/{collection_id}/items/{item_id}",
+                    put(update_root_item).delete(delete_root_item),
+                )
+                // Catalog-extension transaction routes (scoped surface)
                 .route("/catalogs", post(create_root_catalog))
                 .route(
                     "/catalogs/{catalog_id}",

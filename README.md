@@ -64,7 +64,18 @@ GET search takes `bbox`, `datetime`, `ids`, `collections`, `limit`, `sortby` (`+
 
 ### Transactions — require `ENABLE_TRANSACTIONS_EXTENSIONS`
 
-All write routes are catalog-scoped (`/catalogs/...`); the core `/collections` surface stays read-only.
+**Core transactions** — canonical `/collections` surface (STAC Transaction extension / OGC API Features Part-4 style)
+
+| Method | Path | Supports |
+|---|---|---|
+| POST | `/collections` | Create under root; `409` on id collision |
+| PUT | `/collections/{collection_id}` | Update; `400` id mismatch, `404` missing; DAG memberships preserved |
+| DELETE | `/collections/{collection_id}` | Delete collection **and its items**; `404` if missing |
+| POST | `/collections/{collection_id}/items` | Create; `404` missing collection, `409` repost, `400` collection mismatch |
+| PUT | `/collections/{collection_id}/items/{item_id}` | Update; `404` missing item/collection, `400` id mismatch |
+| DELETE | `/collections/{collection_id}/items/{item_id}` | Delete; `404` unless item is in this collection |
+
+**Catalog transactions** — Multi-Tenant Catalogs extension (scoped, poly-hierarchy)
 
 | Method | Path | Supports |
 |---|---|---|
@@ -75,7 +86,7 @@ All write routes are catalog-scoped (`/catalogs/...`); the core `/collections` s
 | DELETE | `/catalogs/{catalog_id}/catalogs/{sub_id}` | Unlink edge only; `404` if not a child |
 | POST | `/catalogs/{catalog_id}/collections` | Mode A create / Mode B link — same codes as sub-catalogs |
 | PUT | `/catalogs/{catalog_id}/collections/{collection_id}` | Update in place — all DAG memberships preserved |
-| DELETE | `/catalogs/{catalog_id}/collections/{collection_id}` | Unlink edge only; `404` if not a child |
+| DELETE | `/catalogs/{catalog_id}/collections/{collection_id}` | Unlink edge only; `404` if not a child (does **not** delete the collection) |
 | POST | `/catalogs/{catalog_id}/collections/{collection_id}/items` | Create; `400` if body `collection` contradicts path |
 | PUT | `/catalogs/{catalog_id}/collections/{collection_id}/items/{item_id}` | Update; same collection check |
 | DELETE | `/catalogs/{catalog_id}/collections/{collection_id}/items/{item_id}` | Delete; `404` unless in this collection |

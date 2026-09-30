@@ -286,6 +286,16 @@ async fn catalog_doc(state: &AppState, catalog: &Catalog) -> Result<serde_json::
     Ok(doc)
 }
 
+/// Serialize an item with canonical links injected — write responses
+/// mirror what a subsequent GET would return.
+fn item_doc(state: &AppState, item: &Item, scoped_catalog_id: Option<&str>) -> serde_json::Value {
+    let mut doc = serde_json::to_value(item).unwrap_or_default();
+    if let Some(col) = item.collection.as_deref() {
+        doc["links"] = json!(item_links(state, &item.id, col, scoped_catalog_id));
+    }
+    doc
+}
+
 /// Serialize a collection with links for the given scope context.
 async fn collection_doc(
     state: &AppState,
@@ -708,7 +718,13 @@ async fn run_scoped_search(
         .valid()
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
-    let empty = || ItemCollection::new(Vec::new()).map_err(|e| ApiError::Internal(e.to_string()));
+    let empty = || {
+        let mut c =
+            ItemCollection::new(Vec::new()).map_err(|e| ApiError::Internal(e.to_string()))?;
+        c.number_matched = Some(0);
+        c.number_returned = Some(0);
+        Ok::<_, ApiError>(c)
+    };
 
     // 1. Resolve all descendant collection IDs in the scope's DAG
     let allowed_collections = state.store.get_descendant_collections(scope_id).await?;
@@ -1382,7 +1398,10 @@ pub async fn create_scoped_item(
         .store
         .index_document(ITEMS_INDEX, &item.id, &item)
         .await?;
-    Ok((StatusCode::CREATED, Json(json!(item))))
+    Ok((
+        StatusCode::CREATED,
+        geo_json(item_doc(&state, &item, Some(&catalog_id))),
+    ))
 }
 
 pub async fn update_scoped_item(
@@ -1396,7 +1415,7 @@ pub async fn update_scoped_item(
         .store
         .index_document(ITEMS_INDEX, &item_id, &item)
         .await?;
-    Ok(Json(json!(item)))
+    Ok(geo_json(item_doc(&state, &item, Some(&catalog_id))))
 }
 
 pub async fn delete_scoped_item(
@@ -1404,6 +1423,183 @@ pub async fn delete_scoped_item(
     State(state): State<Arc<AppState>>,
 ) -> Result<StatusCode, ApiError> {
     require_scoped_collection(&state, &catalog_id, &collection_id).await?;
+    match state.store.get_document(ITEMS_INDEX, &item_id).await? {
+        Some(doc) if doc["collection"] == collection_id => {
+            state.store.delete_document(ITEMS_INDEX, &item_id).await?;
+            Ok(StatusCode::NO_CONTENT)
+        }
+        _ => Err(ApiError::NotFound(item_id)),
+    }
+}
+
+// --- Core Transaction Handlers (canonical /collections surface) ---
+
+/// POST /collections — create a collection parented under root.
+pub async fn create_root_collection(
+    State(state): State<Arc<AppState>>,
+    Json(collection): Json<Collection>,
+) -> Result<impl IntoResponse, ApiError> {
+    if state
+        .store
+        .get_document(CATALOGS_INDEX, &collection.id)
+        .await?
+        .is_some()
+        || state
+            .store
+            .get_document(COLLECTIONS_INDEX, &collection.id)
+            .await?
+            .is_some()
+    {
+        return Err(ApiError::Conflict(collection.id));
+    }
+    state
+        .store
+        .set_parents(
+            &collection.id,
+            vec![ROOT_CATALOG_ID.to_string()],
+            NodeKind::Collection,
+        )
+        .await?;
+    state
+        .store
+        .index_document(COLLECTIONS_INDEX, &collection.id, &collection)
+        .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(global_collection_doc(&state, &collection.id).await?),
+    ))
+}
+
+/// PUT /collections/{id} — update a collection; DAG memberships preserved.
+pub async fn update_root_collection(
+    Path(collection_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(mut collection): Json<Collection>,
+) -> Result<impl IntoResponse, ApiError> {
+    if collection.id != collection_id {
+        return Err(ApiError::BadRequest(format!(
+            "body id '{}' does not match path '{collection_id}'",
+            collection.id
+        )));
+    }
+    if state
+        .store
+        .get_document(COLLECTIONS_INDEX, &collection_id)
+        .await?
+        .is_none()
+    {
+        return Err(ApiError::NotFound(collection_id));
+    }
+    collection.links.clear();
+    state
+        .store
+        .index_document(COLLECTIONS_INDEX, &collection_id, &collection)
+        .await?;
+    Ok(Json(global_collection_doc(&state, &collection.id).await?))
+}
+
+/// DELETE /collections/{id} — removes the collection, its DAG node, and
+/// all of its items (canonical route semantics: a collection owns items).
+pub async fn delete_root_collection(
+    Path(collection_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<StatusCode, ApiError> {
+    if state
+        .store
+        .get_document(COLLECTIONS_INDEX, &collection_id)
+        .await?
+        .is_none()
+    {
+        return Err(ApiError::NotFound(collection_id));
+    }
+    state
+        .store
+        .delete_items_by_collection(&collection_id)
+        .await?;
+    state.store.remove_node(&collection_id).await?;
+    state
+        .store
+        .delete_document(COLLECTIONS_INDEX, &collection_id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /collections/{id}/items — create an item in a collection.
+pub async fn create_root_item(
+    Path(collection_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(mut item): Json<Item>,
+) -> Result<impl IntoResponse, ApiError> {
+    if state
+        .store
+        .get_document(COLLECTIONS_INDEX, &collection_id)
+        .await?
+        .is_none()
+    {
+        return Err(ApiError::NotFound(collection_id));
+    }
+    validate_item_collection(&mut item, &collection_id)?;
+    if state
+        .store
+        .get_document(ITEMS_INDEX, &item.id)
+        .await?
+        .is_some()
+    {
+        return Err(ApiError::Conflict(item.id));
+    }
+    state
+        .store
+        .index_document(ITEMS_INDEX, &item.id, &item)
+        .await?;
+    Ok((StatusCode::CREATED, geo_json(item_doc(&state, &item, None))))
+}
+
+/// PUT /collections/{id}/items/{item_id} — update an item.
+pub async fn update_root_item(
+    Path((collection_id, item_id)): Path<(String, String)>,
+    State(state): State<Arc<AppState>>,
+    Json(mut item): Json<Item>,
+) -> Result<impl IntoResponse, ApiError> {
+    if item.id != item_id {
+        return Err(ApiError::BadRequest(format!(
+            "body id '{}' does not match path '{item_id}'",
+            item.id
+        )));
+    }
+    if state
+        .store
+        .get_document(COLLECTIONS_INDEX, &collection_id)
+        .await?
+        .is_none()
+    {
+        return Err(ApiError::NotFound(collection_id));
+    }
+    match state.store.get_document(ITEMS_INDEX, &item_id).await? {
+        Some(doc) if doc["collection"] == collection_id => {
+            validate_item_collection(&mut item, &collection_id)?;
+            state
+                .store
+                .index_document(ITEMS_INDEX, &item_id, &item)
+                .await?;
+            Ok(geo_json(item_doc(&state, &item, None)))
+        }
+        _ => Err(ApiError::NotFound(item_id)),
+    }
+}
+
+/// DELETE /collections/{id}/items/{item_id} — delete an item.
+pub async fn delete_root_item(
+    Path((collection_id, item_id)): Path<(String, String)>,
+    State(state): State<Arc<AppState>>,
+) -> Result<StatusCode, ApiError> {
+    if state
+        .store
+        .get_document(COLLECTIONS_INDEX, &collection_id)
+        .await?
+        .is_none()
+    {
+        return Err(ApiError::NotFound(collection_id));
+    }
     match state.store.get_document(ITEMS_INDEX, &item_id).await? {
         Some(doc) if doc["collection"] == collection_id => {
             state.store.delete_document(ITEMS_INDEX, &item_id).await?;

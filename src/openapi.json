@@ -37,14 +37,17 @@
           { "name": "token", "in": "query", "schema": { "type": "string" } }
         ],
         "responses": { "200": { "description": "Collections list" } }
-      }
+      },
+      "post": { "summary": "Create collection under root (transactions)", "responses": { "201": { "description": "Created" }, "409": { "description": "ID exists" } } }
     },
     "/collections/{collectionId}": {
       "get": {
         "summary": "Collection document",
         "parameters": [{ "name": "collectionId", "in": "path", "required": true, "schema": { "type": "string" } }],
         "responses": { "200": { "description": "STAC Collection" }, "404": { "description": "Not found" } }
-      }
+      },
+      "put": { "summary": "Update collection (transactions)", "responses": { "200": { "description": "Updated" }, "400": { "description": "ID mismatch" }, "404": { "description": "Not found" } } },
+      "delete": { "summary": "Delete collection and its items (transactions)", "responses": { "204": { "description": "Deleted" }, "404": { "description": "Not found" } } }
     },
     "/collections/{collectionId}/items": {
       "get": {
@@ -55,7 +58,8 @@
           { "name": "token", "in": "query", "schema": { "type": "string" } }
         ],
         "responses": { "200": { "description": "GeoJSON ItemCollection" }, "404": { "description": "Not found" } }
-      }
+      },
+      "post": { "summary": "Create item (transactions)", "responses": { "201": { "description": "Created" }, "404": { "description": "Collection missing" }, "409": { "description": "ID exists" } } }
     },
     "/collections/{collectionId}/items/{itemId}": {
       "get": {
@@ -65,7 +69,9 @@
           { "name": "itemId", "in": "path", "required": true, "schema": { "type": "string" } }
         ],
         "responses": { "200": { "description": "STAC Item" }, "404": { "description": "Not found" } }
-      }
+      },
+      "put": { "summary": "Update item (transactions)", "responses": { "200": { "description": "Updated" }, "400": { "description": "ID mismatch" }, "404": { "description": "Not found" } } },
+      "delete": { "summary": "Delete item (transactions)", "responses": { "204": { "description": "Deleted" }, "404": { "description": "Not found" } } }
     },
     "/sortables": {
       "get": { "summary": "Sortables schema", "responses": { "200": { "description": "JSON Schema of sortable fields" } } }

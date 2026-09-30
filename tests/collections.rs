@@ -476,3 +476,84 @@ async fn test_delete_collection_removes_items() {
     assert_eq!(s, StatusCode::OK);
     assert_eq!(body["numberMatched"], 0);
 }
+
+#[tokio::test]
+async fn test_items_sortby() {
+    // Features-binding sort extension: ?sortby=+field/-field on items listing.
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
+    let col = uniq("is-col");
+    call(&app, "POST", "/collections", Some(collection(&col))).await;
+    for (id, dt) in [
+        ("a", "2023-01-03T00:00:00Z"),
+        ("b", "2023-01-01T00:00:00Z"),
+        ("c", "2023-01-02T00:00:00Z"),
+    ] {
+        let mut it = item(&uniq(&format!("is-{id}")), &col);
+        it["properties"]["datetime"] = json!(dt);
+        call(&app, "POST", &format!("/collections/{col}/items"), Some(it)).await;
+    }
+
+    let datetimes = |body: &serde_json::Value| -> Vec<String> {
+        body["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|f| f["properties"]["datetime"].as_str().map(str::to_owned))
+            .collect()
+    };
+
+    // asc shorthand: ?sortby=+datetime (encoded %2B)
+    let (_, asc) = call(
+        &app,
+        "GET",
+        &format!("/collections/{col}/items?sortby=%2Bdatetime"),
+        None,
+    )
+    .await;
+    let asc_dts = datetimes(&asc);
+    let mut sorted = asc_dts.clone();
+    sorted.sort();
+    assert_eq!(asc_dts, sorted, "asc sort ordering failed");
+
+    // desc shorthand
+    let (_, desc) = call(
+        &app,
+        "GET",
+        &format!("/collections/{col}/items?sortby=-datetime"),
+        None,
+    )
+    .await;
+    let desc_dts = datetimes(&desc);
+    sorted.reverse();
+    assert_eq!(desc_dts, sorted, "desc sort ordering failed");
+}
+
+#[tokio::test]
+async fn test_collection_sortables() {
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
+    let col = uniq("cs-col");
+    call(&app, "POST", "/collections", Some(collection(&col))).await;
+
+    // endpoint exists + collection doc links to it
+    let (s, body) = call(&app, "GET", &format!("/collections/{col}/sortables"), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(body["type"], "object");
+    assert_eq!(body["additionalProperties"], true);
+
+    let (s, body) = call(&app, "GET", &format!("/collections/{col}"), None).await;
+    assert_eq!(s, StatusCode::OK);
+    let sortables = links_by_rel(&body, "http://www.opengis.net/def/rel/ogc/1.0/sortables");
+    assert_eq!(sortables.len(), 1);
+    assert!(sortables[0]["href"]
+        .as_str()
+        .unwrap()
+        .ends_with(&format!("/collections/{col}/sortables")));
+
+    // 404 for a missing collection
+    let (s, _) = call(&app, "GET", "/collections/nope/sortables", None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+}

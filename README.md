@@ -41,7 +41,8 @@ When unset, only the read surface is mounted and the landing page `conformsTo` o
 | GET/POST | `/search` | Registry-wide item search (same handler as `/catalogs/search`). Filters: `collections`, `ids`, `bbox`, `intersects`, `datetime`, `sortby`, `limit`, `offset` → `next`/`prev` links |
 | GET | `/collections` | `?limit=&token=` paging — every collection in the registry |
 | GET | `/collections/{collection_id}` | Canonical links (`self`, `parent` per parent, `duplicate`) |
-| GET | `/collections/{collection_id}/items` | `?limit=&token=` paging; `application/geo+json`, item `self`/`parent`/`collection`/`root` links |
+| GET | `/collections/{collection_id}/sortables` | Per-collection Sortables schema (`ogcapi-features-5` binding) |
+| GET | `/collections/{collection_id}/items` | `?limit=&token=` paging; `?sortby=±field`; `application/geo+json`, item `self`/`parent`/`collection`/`root` links |
 | GET | `/collections/{collection_id}/items/{item_id}` | `application/geo+json` |
 
 **Multi-tenant catalogs routes**
@@ -55,7 +56,7 @@ When unset, only the read surface is mounted and the landing page `conformsTo` o
 | GET | `/catalogs/{catalog_id}/children` | `?type=Catalog\|Collection` filter, `?limit=&token=` paging |
 | GET | `/catalogs/{catalog_id}/collections` | `?limit=&token=` paging |
 | GET | `/catalogs/{catalog_id}/collections/{collection_id}` | Contextual `self`/`parent`, alt parents as `related`/`duplicate` |
-| GET | `/catalogs/{catalog_id}/collections/{collection_id}/items` | `?limit=&token=` paging; `application/geo+json`, scoped item links |
+| GET | `/catalogs/{catalog_id}/collections/{collection_id}/items` | `?limit=&token=` paging; `?sortby=±field`; `application/geo+json`, scoped item links |
 | GET | `/catalogs/{catalog_id}/collections/{collection_id}/items/{item_id}` | `application/geo+json` |
 | GET/POST | `/catalogs/search` | Whole-registry scope. Same filters as `/search` |
 | GET/POST | `/catalogs/{catalog_id}/search` | Same filters, intersected with the catalog's descendant collections |
@@ -99,7 +100,6 @@ Status codes: `201` create (Mode A), `200` link (Mode B `{"id": ...}`) / update,
 
 | Method | Path | Status |
 |---|---|---|
-| GET | `/collections/{id}/sortables` | 404 — root `/sortables` exists |
 | GET | `/collections/{id}/queryables` | 404 |
 | POST | `/catalogs/{id}/bulk` | 404 — bulk transactions extension |
 
@@ -163,6 +163,7 @@ This is a prototype — the endpoints exist but several are shallow. Known gaps:
 
 **Search**
 - `collections`, `ids`, `bbox`, `intersects`, `datetime`, `sortby`, and `limit` are translated to OpenSearch queries — `fields` and `query` are parsed but ignored
+- `sortby` works on `/search` + `/catalogs/*/search` (item-search binding) and on items listings `?sortby=±field` (features binding); sortables at `/sortables` + `/collections/{id}/sortables`
 - `datetime` bounds must be full RFC3339 datetimes — date-only inputs (`2023-06-01`) are rejected at validation
 - No CQL2 / filter extension support
 - Offset pagination exists: `{"offset": n}` in the POST body or `?offset=` on GET + `next`/`prev` links (`method: POST`, `body`) in search responses; items listings use `?limit=&token=` with `method: GET` `next` links. All paged responses include `numberMatched`/`numberReturned`. Deep paging (>10k) needs `search_after`/cursor — not implemented

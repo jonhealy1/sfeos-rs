@@ -48,6 +48,8 @@ pub struct ChildrenQuery {
 pub struct ListQuery {
     pub limit: Option<u64>,
     pub token: Option<String>,
+    /// Sort extension (features binding): `?sortby=+field,-field`.
+    pub sortby: Option<String>,
 }
 
 /// Resolve `?limit=&token=` into `(limit, offset)`. `limit=0` is a 400;
@@ -229,6 +231,12 @@ fn global_collection_links(state: &AppState, collection_id: &str, parents: &[Str
         link_json(base.clone(), "root"),
         link_json(format!("{base}/collections/{collection_id}/items"), "items"),
     ];
+    let mut sortables = link_json(
+        format!("{base}/collections/{collection_id}/sortables"),
+        "http://www.opengis.net/def/rel/ogc/1.0/sortables",
+    );
+    sortables.r#type = Some("application/schema+json".to_string());
+    links.push(sortables);
     let mut real: Vec<&str> = parents
         .iter()
         .map(String::as_str)
@@ -321,8 +329,10 @@ fn conformance_classes(state: &AppState) -> Vec<&'static str> {
         "https://api.stacspec.org/v1.0.0/core",
         "https://api.stacspec.org/v1.0.0/browseable",
         "https://api.stacspec.org/v1.0.0/ogcapi-features",
+        "https://api.stacspec.org/v1.1.0/ogcapi-features#sort",
         "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core",
         "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/geojson",
+        "http://www.opengis.net/spec/ogcapi-features-5/1.0/conf/sortables",
         "https://api.stacspec.org/v1.0.0/item-search",
         "https://api.stacspec.org/v1.1.0/item-search#sort",
         "https://api.stacspec.org/v1.1.0/item-search#sortables",
@@ -541,6 +551,7 @@ pub async fn get_catalog_children(
     let (limit, offset) = list_window(&ListQuery {
         limit: query.limit,
         token: query.token.clone(),
+        sortby: None,
     })?;
     let kind = parse_kind(query.r#type.as_deref());
     let nodes = state.store.get_child_nodes(&catalog_id, kind).await?;
@@ -673,16 +684,15 @@ pub async fn list_sub_catalogs(
     })))
 }
 
-/// GET /sortables — OGC Sortables schema for item search.
-/// `additionalProperties: true` matches our permissive sort (unknown
-/// fields sort last, evaluating to null), so any name is legal.
-pub async fn sortables(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    Json(json!({
+/// Shared OGC Sortables schema — `additionalProperties: true` matches our
+/// permissive sort (unknown fields evaluate to null, sorting last).
+fn sortables_schema(base: &str, id_path: &str, title: &str) -> serde_json::Value {
+    json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": format!("{}/sortables", state.base_url),
+        "$id": format!("{base}{id_path}"),
         "type": "object",
-        "title": "Item Search Sortables",
-        "description": "Fields usable in the `sortby` parameter for item search.",
+        "title": title,
+        "description": "Fields usable in the `sortby` parameter.",
         "properties": {
             "id": {"type": "string"},
             "collection": {"type": "string"},
@@ -690,7 +700,36 @@ pub async fn sortables(State(state): State<Arc<AppState>>) -> Json<serde_json::V
             "properties.datetime": {"type": "string", "format": "date-time"}
         },
         "additionalProperties": true
-    }))
+    })
+}
+
+/// GET /sortables — Sortables schema for item search (item-search binding).
+pub async fn sortables(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    Json(sortables_schema(
+        &state.base_url,
+        "/sortables",
+        "Item Search Sortables",
+    ))
+}
+
+/// GET /collections/{id}/sortables — features-binding sortables schema.
+pub async fn collection_sortables(
+    Path(collection_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if state
+        .store
+        .get_document(COLLECTIONS_INDEX, &collection_id)
+        .await?
+        .is_none()
+    {
+        return Err(ApiError::NotFound(collection_id));
+    }
+    Ok(Json(sortables_schema(
+        &state.base_url,
+        &format!("/collections/{collection_id}/sortables"),
+        "Collection Items Sortables",
+    )))
 }
 
 /// GET /catalogs/{id}/conformance — catalog-scoped conformance classes.
@@ -1324,6 +1363,12 @@ async fn items_page(
         .items
         .additional_fields
         .insert("offset".to_string(), json!(offset));
+    if let Some(sortby) = &query.sortby {
+        search.items.sortby = sortby
+            .split(',')
+            .map(|s| s.parse().expect("infallible"))
+            .collect();
+    }
     let (mut items, matched) = state.store.search_items(collections, &search).await?;
     for item in items.iter_mut() {
         let item_id = item["id"].as_str().unwrap_or_default().to_string();

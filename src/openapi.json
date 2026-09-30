@@ -49,13 +49,21 @@
       "put": { "summary": "Update collection (transactions)", "responses": { "200": { "description": "Updated" }, "400": { "description": "ID mismatch" }, "404": { "description": "Not found" } } },
       "delete": { "summary": "Delete collection and its items (transactions)", "responses": { "204": { "description": "Deleted" }, "404": { "description": "Not found" } } }
     },
+    "/collections/{collectionId}/sortables": {
+      "get": {
+        "summary": "Per-collection Sortables schema",
+        "parameters": [{ "name": "collectionId", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "JSON Schema of sortable fields" }, "404": { "description": "Not found" } }
+      }
+    },
     "/collections/{collectionId}/items": {
       "get": {
         "summary": "Collection items",
         "parameters": [
           { "name": "collectionId", "in": "path", "required": true, "schema": { "type": "string" } },
           { "name": "limit", "in": "query", "schema": { "type": "integer" } },
-          { "name": "token", "in": "query", "schema": { "type": "string" } }
+          { "name": "token", "in": "query", "schema": { "type": "string" } },
+          { "name": "sortby", "in": "query", "schema": { "type": "string" } }
         ],
         "responses": { "200": { "description": "GeoJSON ItemCollection" }, "404": { "description": "Not found" } }
       },
@@ -164,7 +172,8 @@
           { "name": "catalogId", "in": "path", "required": true, "schema": { "type": "string" } },
           { "name": "collectionId", "in": "path", "required": true, "schema": { "type": "string" } },
           { "name": "limit", "in": "query", "schema": { "type": "integer" } },
-          { "name": "token", "in": "query", "schema": { "type": "string" } }
+          { "name": "token", "in": "query", "schema": { "type": "string" } },
+          { "name": "sortby", "in": "query", "schema": { "type": "string" } }
         ],
         "responses": { "200": { "description": "GeoJSON ItemCollection" }, "404": { "description": "Not found" } }
       },

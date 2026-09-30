@@ -30,6 +30,10 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .route("/collections", get(list_collections))
         .route("/collections/{collection_id}", get(get_collection))
         .route(
+            "/collections/{collection_id}/sortables",
+            get(collection_sortables),
+        )
+        .route(
             "/collections/{collection_id}/items",
             get(list_collection_items),
         )

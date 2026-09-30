@@ -134,6 +134,33 @@ Other handy commands: `cargo check` (fast type-check, no binary), `cargo test` (
 
 Or use the **Makefile**, which handles the Docker dependency for you (`make test` / `make test-integration` start OpenSearch and wait for it to be healthy before running tests): `make up`, `make test`, `make test-integration`, `make ingest`, `make reset` (wipes data volumes), `make down`.
 
+## Extending (custom routes)
+
+`sfeos-rs` is usable as a library — the router is composable axum, so consumers merge their own extension routes sharing the same `AppState` (store, link engine, config). Three seams:
+
+- `sfeos_rs::read_router()` / `sfeos_rs::transaction_router()` — mount selectively (e.g. transactions behind auth middleware), or `build_app(state)` for the whole surface
+- `handlers::AppState` fields are public — your handlers can take `State<Arc<AppState>>` and call `state.store.*` directly
+- Standard axum composition: `.merge()` extra routes, `.layer()` middleware
+
+```rust
+use axum::{extract::State, routing::get, Json, Router};
+use serde_json::json;
+use sfeos_rs::{handlers::AppState, read_router, store::ROOT_CATALOG_ID};
+use std::sync::Arc;
+
+async fn stats(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let children = state.store.get_children(ROOT_CATALOG_ID).await.unwrap_or_default();
+    Json(json!({ "root_children": children.len() }))
+}
+
+let state = Arc::new(AppState { /* store, links, base_url, flags */ });
+let app = read_router()
+    .merge(Router::new().route("/stats", get(stats)))
+    .with_state(state);
+```
+
+Anything middleware-shaped (auth, CORS, rate-limiting) goes through `.layer()` — no fork needed.
+
 ## Sample Data
 
 `sample_data/` contains a demo hierarchy — folder structure mirrors the DAG:

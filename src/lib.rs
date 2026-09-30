@@ -11,11 +11,12 @@ use axum::{
 use handlers::*;
 use std::sync::Arc;
 
-/// Build the API router. Mutating routes are only mounted when
-/// `state.enable_transactions` is set (ENABLE_TRANSACTIONS_EXTENSIONS).
-pub fn build_app(state: Arc<AppState>) -> Router {
-    // Read-only surface — always registered
-    let mut app = Router::new()
+/// Read-only router — the full STAC read surface (landing page, core
+/// collections routes, catalogs registry, all search endpoints).
+/// Returned unbound; call `.with_state(state)` after merging in your
+/// own extension routes.
+pub fn read_router() -> Router<Arc<AppState>> {
+    Router::new()
         // --- Global Landing Page ---
         .route("/", get(root_landing_page))
         .route("/conformance", get(conformance))
@@ -77,57 +78,64 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .route(
             "/catalogs/{catalog_id}/search",
             get(scoped_search_get).post(scoped_search_post),
-        );
+        )
+}
 
-    // Transaction surface — hybrid extension beyond the multi-tenant-catalogs
-    // spec; only mounted when ENABLE_TRANSACTIONS_EXTENSIONS is set.
+/// Transaction router — mutating routes. `build_app` merges this only
+/// when `state.enable_transactions` is set; embedders may merge it
+/// selectively themselves (e.g. behind auth middleware).
+pub fn transaction_router() -> Router<Arc<AppState>> {
+    Router::new()
+        // Core transaction routes (STAC Transaction extension /
+        // OGC API Features Part-4 style) on the canonical surface
+        .route("/collections", post(create_root_collection))
+        .route(
+            "/collections/{collection_id}",
+            put(update_root_collection).delete(delete_root_collection),
+        )
+        .route("/collections/{collection_id}/items", post(create_root_item))
+        .route(
+            "/collections/{collection_id}/items/{item_id}",
+            put(update_root_item).delete(delete_root_item),
+        )
+        // Catalog-extension transaction routes (scoped surface)
+        .route("/catalogs", post(create_root_catalog))
+        .route(
+            "/catalogs/{catalog_id}",
+            put(update_catalog).delete(disband_catalog),
+        )
+        .route(
+            "/catalogs/{catalog_id}/catalogs",
+            post(link_or_create_sub_catalog),
+        )
+        .route(
+            "/catalogs/{catalog_id}/catalogs/{sub_id}",
+            delete(unlink_sub_catalog),
+        )
+        .route(
+            "/catalogs/{catalog_id}/collections",
+            post(link_or_create_scoped_collection),
+        )
+        .route(
+            "/catalogs/{catalog_id}/collections/{collection_id}",
+            put(update_scoped_collection).delete(unlink_scoped_collection),
+        )
+        .route(
+            "/catalogs/{catalog_id}/collections/{collection_id}/items",
+            post(create_scoped_item),
+        )
+        .route(
+            "/catalogs/{catalog_id}/collections/{collection_id}/items/{item_id}",
+            put(update_scoped_item).delete(delete_scoped_item),
+        )
+}
+
+/// Build the API router. Mutating routes are only mounted when
+/// `state.enable_transactions` is set (ENABLE_TRANSACTIONS_EXTENSIONS).
+pub fn build_app(state: Arc<AppState>) -> Router {
+    let mut app = read_router();
     if state.enable_transactions {
-        app = app.merge(
-            Router::new()
-                // Core transaction routes (STAC Transaction extension /
-                // OGC API Features Part-4 style) on the canonical surface
-                .route("/collections", post(create_root_collection))
-                .route(
-                    "/collections/{collection_id}",
-                    put(update_root_collection).delete(delete_root_collection),
-                )
-                .route("/collections/{collection_id}/items", post(create_root_item))
-                .route(
-                    "/collections/{collection_id}/items/{item_id}",
-                    put(update_root_item).delete(delete_root_item),
-                )
-                // Catalog-extension transaction routes (scoped surface)
-                .route("/catalogs", post(create_root_catalog))
-                .route(
-                    "/catalogs/{catalog_id}",
-                    put(update_catalog).delete(disband_catalog),
-                )
-                .route(
-                    "/catalogs/{catalog_id}/catalogs",
-                    post(link_or_create_sub_catalog),
-                )
-                .route(
-                    "/catalogs/{catalog_id}/catalogs/{sub_id}",
-                    delete(unlink_sub_catalog),
-                )
-                .route(
-                    "/catalogs/{catalog_id}/collections",
-                    post(link_or_create_scoped_collection),
-                )
-                .route(
-                    "/catalogs/{catalog_id}/collections/{collection_id}",
-                    put(update_scoped_collection).delete(unlink_scoped_collection),
-                )
-                .route(
-                    "/catalogs/{catalog_id}/collections/{collection_id}/items",
-                    post(create_scoped_item),
-                )
-                .route(
-                    "/catalogs/{catalog_id}/collections/{collection_id}/items/{item_id}",
-                    put(update_scoped_item).delete(delete_scoped_item),
-                ),
-        );
+        app = app.merge(transaction_router());
     }
-
     app.with_state(state)
 }

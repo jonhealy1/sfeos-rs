@@ -8,7 +8,11 @@ A STAC API Opensearch server built with Rust
 
 - [What is this?](#what-is-this)
 - [API Routes](#api-routes)
+  - [Read surface — always mounted](#read-surface--always-mounted)
+  - [Transactions](#transactions--require-enable_transactions_extensions)
+  - [Planned](#planned--currently-404405)
 - [Getting Started (coming from Python?)](#getting-started-coming-from-python)
+- [Extending (custom routes)](#extending-custom-routes)
 - [Sample Data](#sample-data)
 - [TODO](#todo)
 

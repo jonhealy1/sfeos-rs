@@ -202,11 +202,9 @@ This is a prototype — the endpoints exist but several are shallow. Known gaps:
 **Core STAC routes**
 - `GET /queryables` endpoints (root + per-collection) — not implemented
 - `service-doc` (human-readable API docs page) — OpenAPI JSON exists at `/api`; no HTML variant
-- Optimistic concurrency for link/unlink and PUT races (`_seq_no`/`_primary_term`) — see Hierarchy below
 
 **Hierarchy & data**
 - Children/descendants capped at 10k per level — real pagination needed on the DAG itself
-- No optimistic concurrency: concurrent link/unlink on the same node can lost-update (needs `_seq_no`/`_primary_term` or scripted upserts)
 - Reserved IDs: a catalog named `search` collides with the static route — should 400 on create
 - Orphaned docs: a hierarchy node whose document is missing is silently skipped in children listings — needs a consistency check
 - Catalogs don't emit per-child `rel: child` links (upstream behavior) — the `children` endpoint link is provided instead
@@ -217,4 +215,6 @@ This is a prototype — the endpoints exist but several are shallow. Known gaps:
 - OpenSearch runs single-node with the security plugin disabled — dev only, harden before anything else
 - No auth or per-tenant authorization — catalog scope is organizational only, not a security boundary
 
-**Tests** — `tests/catalogs.rs` ports `stac-fastapi-elasticsearch-opensearch`'s `test_catalogs.py` (103 passing, 17 `#[ignore]`d pending: optimistic concurrency, `stac-validate`, per-child `child` links, user-link merge semantics). CI also runs [`stac-api-validator`](https://github.com/stac-utils/stac-api-validator) (core, item-search, features, browseable — all passing) as an advisory job. Each test gets isolated `it-*` indices (unique `Store` index prefix), so tests never touch dev data — `make test*` sweeps `it-*` afterwards, or `make test-clean` manually.
+**Concurrency** — all writes use optimistic concurrency via OpenSearch `_seq_no`/`_primary_term`: document PUTs re-stamp and retry up to 5 times (`Store::replace_document`/`put_document`), hierarchy link/unlink replay the edge mutation on a fresh read (`Store::mutate_node`), and POSTs use `op_type=create` for atomic repost-409s. Exhausted retries surface as HTTP 409.
+
+**Tests** — `tests/catalogs.rs` ports `stac-fastapi-elasticsearch-opensearch`'s `test_catalogs.py` (112 passing, 8 `#[ignore]`d pending: `stac-validate`, per-child `child` links, user-link merge semantics, validator wiring). CI also runs [`stac-api-validator`](https://github.com/stac-utils/stac-api-validator) (core, item-search, features, browseable — all passing) as an advisory job. Each test gets isolated `it-*` indices (unique `Store` index prefix), so tests never touch dev data — `make test*` sweeps `it-*` afterwards, or `make test-clean` manually.

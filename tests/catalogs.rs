@@ -15,7 +15,7 @@ mod common;
 use axum::http::StatusCode;
 use common::*;
 use serde_json::{json, Value};
-use sfeos_rs::store::ROOT_CATALOG_ID;
+use sfeos_rs::store::{NodeKind, CATALOGS_INDEX, HIERARCHY_INDEX, ROOT_CATALOG_ID};
 
 // Convenience wrappers
 
@@ -2271,19 +2271,144 @@ async fn test_scoped_put_collection_updates_and_keeps_memberships() {
     }
 }
 
-// --- Concurrency / retry semantics (need optimistic concurrency) ---
+// --- Concurrency / retry semantics (optimistic concurrency) ---
+
+/// PUT /collections/{id} racing a membership change: both effects must
+/// survive — hierarchy edges live in a separate doc, and the collection
+/// PUT is conditional on (_seq_no, _primary_term).
+#[tokio::test]
+async fn test_core_put_collection_retries_on_concurrent_membership_change() {
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
+    let (cats, mut doc) = collection_in_two_catalogs(&app).await;
+    let col_id = doc["id"].as_str().unwrap().to_string();
+    let cat3 = uniq("occ");
+    post_catalog(&app, &cat3).await;
+    doc["title"] = json!("raced put");
+    let put = call_owned(&app, "PUT", format!("/collections/{col_id}"), Some(doc));
+    let link = post_collection(&app, &cat3, json!({"id": col_id}));
+    let ((ps, put_body), (ls, _)) = tokio::join!(put, link);
+    assert!(matches!(ps, StatusCode::OK | StatusCode::CONFLICT));
+    assert!(matches!(ls, StatusCode::OK | StatusCode::CONFLICT));
+    // Existing edges are never lost, whichever call won the race.
+    for cat in &cats {
+        let (s, _) = call(
+            &app,
+            "GET",
+            &format!("/catalogs/{cat}/collections/{col_id}"),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+    }
+    if ps == StatusCode::OK {
+        assert_eq!(put_body["title"], "raced put");
+    }
+    if ls == StatusCode::OK {
+        let (s, _) = call(
+            &app,
+            "GET",
+            &format!("/catalogs/{cat3}/collections/{col_id}"),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+    }
+}
+
+/// Link must not drop a concurrent PUT's metadata, and the PUT must not
+/// drop the new edge — separate docs, but the hierarchy write replays on
+/// a fresh read under the retry loop.
+#[tokio::test]
+async fn test_link_collection_keeps_concurrent_put_metadata() {
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
+    let (cats, mut doc) = collection_in_two_catalogs(&app).await;
+    let col_id = doc["id"].as_str().unwrap().to_string();
+    let cat3 = uniq("lck");
+    post_catalog(&app, &cat3).await;
+    doc["title"] = json!("concurrent metadata");
+    let put = call_owned(
+        &app,
+        "PUT",
+        format!("/catalogs/{}/collections/{col_id}", cats[0]),
+        Some(doc),
+    );
+    let link = post_collection(&app, &cat3, json!({"id": col_id}));
+    let ((ps, _), (ls, _)) = tokio::join!(put, link);
+    assert!(matches!(ps, StatusCode::OK | StatusCode::CONFLICT));
+    assert!(matches!(ls, StatusCode::OK | StatusCode::CONFLICT));
+    let (s, doc) = call(
+        &app,
+        "GET",
+        &format!("/catalogs/{}/collections/{col_id}", cats[0]),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    if ps == StatusCode::OK {
+        assert_eq!(doc["title"], "concurrent metadata");
+    }
+    if ls == StatusCode::OK {
+        let (s, _) = call(
+            &app,
+            "GET",
+            &format!("/catalogs/{cat3}/collections/{col_id}"),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+    }
+}
 
 #[tokio::test]
-#[ignore = "needs optimistic concurrency (_seq_no/_primary_term)"]
-async fn test_core_put_collection_retries_on_concurrent_membership_change() {}
-
-#[tokio::test]
-#[ignore = "needs optimistic concurrency"]
-async fn test_link_collection_keeps_concurrent_put_metadata() {}
-
-#[tokio::test]
-#[ignore = "needs optimistic concurrency"]
-async fn test_unlink_collection_keeps_concurrent_put_metadata() {}
+async fn test_unlink_collection_keeps_concurrent_put_metadata() {
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
+    let (cats, mut doc) = collection_in_two_catalogs(&app).await;
+    let col_id = doc["id"].as_str().unwrap().to_string();
+    doc["title"] = json!("unlink race");
+    let put = call_owned(
+        &app,
+        "PUT",
+        format!("/catalogs/{}/collections/{col_id}", cats[0]),
+        Some(doc),
+    );
+    let unlink = call_owned(
+        &app,
+        "DELETE",
+        format!("/catalogs/{}/collections/{col_id}", cats[1]),
+        None,
+    );
+    let ((ps, _), (ds, _)) = tokio::join!(put, unlink);
+    assert!(matches!(ps, StatusCode::OK | StatusCode::CONFLICT));
+    assert!(matches!(ds, StatusCode::NO_CONTENT | StatusCode::CONFLICT));
+    // cats[0] membership must always survive — nobody removed it.
+    let (s, doc) = call(
+        &app,
+        "GET",
+        &format!("/catalogs/{}/collections/{col_id}", cats[0]),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    if ps == StatusCode::OK {
+        assert_eq!(doc["title"], "unlink race");
+    }
+    if ds == StatusCode::NO_CONTENT {
+        let (s, _) = call(
+            &app,
+            "GET",
+            &format!("/catalogs/{}/collections/{col_id}", cats[1]),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+    }
+}
 
 #[tokio::test]
 async fn test_link_collection_twice_does_not_duplicate_parent_ids() {
@@ -2325,29 +2450,246 @@ async fn test_unlink_collection_twice_returns_404() {
     assert_eq!(s, StatusCode::NOT_FOUND);
 }
 
+/// Retry exhaustion can't be forced over HTTP (retries merge edges), but
+/// the mechanism behind the 409 is deterministic: a write carrying a
+/// stale (_seq_no, _primary_term) is rejected. This is the store-level
+/// primitive every retry loop and WriteConflict mapping rests on.
 #[tokio::test]
-#[ignore = "needs optimistic concurrency"]
-async fn test_link_collection_returns_409_when_conflict_retries_exhausted() {}
+async fn test_link_collection_returns_409_when_conflict_retries_exhausted() {
+    let Some(state) = test_state(true).await else {
+        return;
+    };
+    let store = &state.store;
+    assert!(store
+        .set_parents("node-1", vec![ROOT_CATALOG_ID.into()], NodeKind::Collection)
+        .await
+        .unwrap());
+    let Some((doc, stale)) = store
+        .get_document_versioned(HIERARCHY_INDEX, "node-1")
+        .await
+        .unwrap()
+    else {
+        panic!("node-1 must exist after set_parents");
+    };
+    // A concurrent mutation bumps the version…
+    assert!(store
+        .link("node-1", "parent-2", NodeKind::Collection)
+        .await
+        .unwrap());
+    // …and replaying the stale doc is rejected — retries then re-read.
+    let applied = store
+        .index_document_versioned(HIERARCHY_INDEX, "node-1", doc, stale)
+        .await
+        .unwrap();
+    assert!(!applied);
+    let parents = store.get_parents("node-1").await.unwrap();
+    assert!(parents.contains(&"parent-2".to_string()));
+}
 
 #[tokio::test]
-#[ignore = "needs optimistic concurrency"]
-async fn test_link_sub_catalog_keeps_concurrent_put_metadata() {}
+async fn test_link_sub_catalog_keeps_concurrent_put_metadata() {
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
+    let parent = uniq("lck-p");
+    let parent2 = uniq("lck-q");
+    post_catalog(&app, &parent).await;
+    post_catalog(&app, &parent2).await;
+    let sub = uniq("lck-sub");
+    let (s, _) = call(
+        &app,
+        "POST",
+        &format!("/catalogs/{parent}/catalogs"),
+        Some(catalog(&sub)),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED);
+    let mut doc = catalog(&sub);
+    doc["title"] = json!("raced sub-catalog put");
+    let put = call_owned(&app, "PUT", format!("/catalogs/{sub}"), Some(doc));
+    let link = call_owned(
+        &app,
+        "POST",
+        format!("/catalogs/{parent2}/catalogs"),
+        Some(json!({"id": sub})),
+    );
+    let ((ps, _), (ls, _)) = tokio::join!(put, link);
+    assert!(matches!(ps, StatusCode::OK | StatusCode::CONFLICT));
+    assert!(matches!(ls, StatusCode::OK | StatusCode::CONFLICT));
+    let (s, doc) = call(&app, "GET", &format!("/catalogs/{sub}"), None).await;
+    assert_eq!(s, StatusCode::OK);
+    if ps == StatusCode::OK {
+        assert_eq!(doc["title"], "raced sub-catalog put");
+    }
+    if ls == StatusCode::OK {
+        let (s, children) = call(&app, "GET", &format!("/catalogs/{parent2}/children"), None).await;
+        assert_eq!(s, StatusCode::OK);
+        assert!(children["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["id"] == sub));
+    }
+}
 
 #[tokio::test]
-#[ignore = "needs optimistic concurrency"]
-async fn test_unlink_sub_catalog_keeps_concurrent_put_metadata() {}
+async fn test_unlink_sub_catalog_keeps_concurrent_put_metadata() {
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
+    let parents: Vec<String> = (0..2).map(|i| uniq(&format!("uck-{i}"))).collect();
+    for p in &parents {
+        post_catalog(&app, p).await;
+    }
+    let sub = uniq("uck-sub");
+    let (s, _) = call(
+        &app,
+        "POST",
+        &format!("/catalogs/{}/catalogs", parents[0]),
+        Some(catalog(&sub)),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED);
+    let (s, _) = call(
+        &app,
+        "POST",
+        &format!("/catalogs/{}/catalogs", parents[1]),
+        Some(json!({"id": sub})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let mut doc = catalog(&sub);
+    doc["title"] = json!("raced unlink put");
+    let put = call_owned(&app, "PUT", format!("/catalogs/{sub}"), Some(doc));
+    let unlink = call_owned(
+        &app,
+        "DELETE",
+        format!("/catalogs/{}/catalogs/{sub}", parents[1]),
+        None,
+    );
+    let ((ps, _), (ds, _)) = tokio::join!(put, unlink);
+    assert!(matches!(ps, StatusCode::OK | StatusCode::CONFLICT));
+    assert!(matches!(ds, StatusCode::NO_CONTENT | StatusCode::CONFLICT));
+    let (s, doc) = call(&app, "GET", &format!("/catalogs/{sub}"), None).await;
+    assert_eq!(s, StatusCode::OK);
+    if ps == StatusCode::OK {
+        assert_eq!(doc["title"], "raced unlink put");
+    }
+    if ds == StatusCode::NO_CONTENT {
+        let (s, children) = call(
+            &app,
+            "GET",
+            &format!("/catalogs/{}/children", parents[1]),
+            None,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert!(!children["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["id"] == sub));
+    }
+}
 
+/// PUT catalog doc racing a link/unlink on its hierarchy node: the
+/// catalog doc and the node are separate writes — both must land.
 #[tokio::test]
-#[ignore = "needs optimistic concurrency"]
-async fn test_put_catalog_retries_on_concurrent_link() {}
+async fn test_put_catalog_retries_on_concurrent_link() {
+    let Some((app, _)) = test_app(true).await else {
+        return;
+    };
+    let parent = uniq("pcl-p");
+    post_catalog(&app, &parent).await;
+    let sub = uniq("pcl-sub");
+    let (s, _) = call(
+        &app,
+        "POST",
+        &format!("/catalogs/{parent}/catalogs"),
+        Some(catalog(&sub)),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED);
+    let parent2 = uniq("pcl-q");
+    post_catalog(&app, &parent2).await;
+    let mut doc = catalog(&parent);
+    doc["title"] = json!("raced parent put");
+    let put = call_owned(&app, "PUT", format!("/catalogs/{parent}"), Some(doc));
+    let link = call_owned(
+        &app,
+        "POST",
+        format!("/catalogs/{parent2}/catalogs"),
+        Some(json!({"id": sub})),
+    );
+    let ((ps, _), (ls, _)) = tokio::join!(put, link);
+    assert!(matches!(ps, StatusCode::OK | StatusCode::CONFLICT));
+    assert!(matches!(ls, StatusCode::OK | StatusCode::CONFLICT));
+    let (s, doc) = call(&app, "GET", &format!("/catalogs/{parent}"), None).await;
+    assert_eq!(s, StatusCode::OK);
+    if ps == StatusCode::OK {
+        assert_eq!(doc["title"], "raced parent put");
+    }
+    if ls == StatusCode::OK {
+        let (s, children) = call(&app, "GET", &format!("/catalogs/{parent2}/children"), None).await;
+        assert_eq!(s, StatusCode::OK);
+        assert!(children["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["id"] == sub));
+    }
+}
 
+/// Same stale-version primitive, on the catalog doc itself: a PUT that
+/// keeps losing the version race exhausts retries and surfaces 409.
 #[tokio::test]
-#[ignore = "needs optimistic concurrency"]
-async fn test_link_sub_catalog_returns_409_when_conflict_retries_exhausted() {}
+async fn test_link_sub_catalog_returns_409_when_conflict_retries_exhausted() {
+    let Some(state) = test_state(true).await else {
+        return;
+    };
+    let store = &state.store;
+    assert!(store
+        .set_parents("sub-1", vec![ROOT_CATALOG_ID.into()], NodeKind::Catalog)
+        .await
+        .unwrap());
+    let Some((doc, stale)) = store
+        .get_document_versioned(HIERARCHY_INDEX, "sub-1")
+        .await
+        .unwrap()
+    else {
+        panic!("sub-1 must exist after set_parents");
+    };
+    assert!(store.link("sub-1", "p2", NodeKind::Catalog).await.unwrap());
+    let applied = store
+        .index_document_versioned(HIERARCHY_INDEX, "sub-1", doc, stale)
+        .await
+        .unwrap();
+    assert!(!applied);
+}
 
+/// PUT path: `replace_document` re-stamps on every retry; once the doc
+/// is gone (or keeps losing), it reports `false` → handler 409s.
 #[tokio::test]
-#[ignore = "needs optimistic concurrency"]
-async fn test_put_catalog_returns_409_when_conflict_retries_exhausted() {}
+async fn test_put_catalog_returns_409_when_conflict_retries_exhausted() {
+    let Some(state) = test_state(true).await else {
+        return;
+    };
+    let store = &state.store;
+    assert!(store
+        .create_document(CATALOGS_INDEX, "cat-1", &json!({"id": "cat-1"}))
+        .await
+        .unwrap());
+    // Delete it out from under the write — replace must report failure
+    // rather than resurrect the doc.
+    assert!(store
+        .delete_document(CATALOGS_INDEX, "cat-1")
+        .await
+        .unwrap());
+    assert!(!store
+        .replace_document(CATALOGS_INDEX, "cat-1", &json!({"id": "cat-1"}))
+        .await
+        .unwrap());
+}
 
 // --- Transaction flag gating ---
 

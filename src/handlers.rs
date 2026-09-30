@@ -487,18 +487,24 @@ pub async fn create_root_catalog(
             return Err(ApiError::Conflict(catalog.id.clone()));
         }
     }
-    state
+    if !state
         .store
         .set_parents(
             &catalog.id,
             vec![ROOT_CATALOG_ID.to_string()],
             NodeKind::Catalog,
         )
-        .await?;
-    state
+        .await?
+    {
+        return Err(ApiError::WriteConflict(catalog.id));
+    }
+    if !state
         .store
-        .index_document(CATALOGS_INDEX, &catalog.id, &catalog)
-        .await?;
+        .create_document(CATALOGS_INDEX, &catalog.id, &catalog)
+        .await?
+    {
+        return Err(ApiError::Conflict(catalog.id));
+    }
     Ok((
         StatusCode::CREATED,
         Json(catalog_doc(&state, &catalog).await?),
@@ -535,10 +541,13 @@ pub async fn update_catalog(
             catalog.id
         )));
     }
-    state
+    if !state
         .store
-        .index_document(CATALOGS_INDEX, &catalog_id, &catalog)
-        .await?;
+        .replace_document(CATALOGS_INDEX, &catalog_id, &catalog)
+        .await?
+    {
+        return Err(ApiError::WriteConflict(catalog_id));
+    }
     Ok(Json(catalog_doc(&state, &catalog).await?))
 }
 
@@ -902,10 +911,13 @@ pub async fn link_or_create_sub_catalog(
             {
                 return Err(ApiError::NotFound(id));
             }
-            state
+            if !state
                 .store
                 .link(&id, &catalog_id, NodeKind::Catalog)
-                .await?;
+                .await?
+            {
+                return Err(ApiError::WriteConflict(id));
+            }
             let mut doc = state
                 .store
                 .get_document(CATALOGS_INDEX, &id)
@@ -927,14 +939,20 @@ pub async fn link_or_create_sub_catalog(
                     return Err(ApiError::Conflict(new_catalog.id.clone()));
                 }
             }
-            state
+            if !state
                 .store
                 .set_parents(&new_catalog.id, vec![catalog_id], NodeKind::Catalog)
-                .await?;
-            state
+                .await?
+            {
+                return Err(ApiError::WriteConflict(new_catalog.id));
+            }
+            if !state
                 .store
-                .index_document(CATALOGS_INDEX, &new_catalog.id, &new_catalog)
-                .await?;
+                .create_document(CATALOGS_INDEX, &new_catalog.id, &new_catalog)
+                .await?
+            {
+                return Err(ApiError::Conflict(new_catalog.id));
+            }
             Ok((
                 StatusCode::CREATED,
                 Json(catalog_doc(&state, &new_catalog).await?),
@@ -959,7 +977,9 @@ pub async fn unlink_sub_catalog(
         return Err(ApiError::NotFound(format!("{catalog_id}/{sub_id}")));
     }
     // Unlink only; orphans are adopted by root rather than deleted
-    state.store.unlink_and_adopt(&sub_id, &catalog_id).await?;
+    if !state.store.unlink_and_adopt(&sub_id, &catalog_id).await? {
+        return Err(ApiError::WriteConflict(sub_id));
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1030,10 +1050,13 @@ pub async fn link_or_create_scoped_collection(
             {
                 return Err(ApiError::NotFound(id));
             }
-            state
+            if !state
                 .store
                 .link(&id, &catalog_id, NodeKind::Collection)
-                .await?;
+                .await?
+            {
+                return Err(ApiError::WriteConflict(id));
+            }
             let mut doc = state
                 .store
                 .get_document(COLLECTIONS_INDEX, &id)
@@ -1055,18 +1078,24 @@ pub async fn link_or_create_scoped_collection(
                     return Err(ApiError::Conflict(collection.id.clone()));
                 }
             }
-            state
+            if !state
                 .store
                 .set_parents(
                     &collection.id,
                     vec![catalog_id.clone()],
                     NodeKind::Collection,
                 )
-                .await?;
-            state
+                .await?
+            {
+                return Err(ApiError::WriteConflict(collection.id));
+            }
+            if !state
                 .store
-                .index_document(COLLECTIONS_INDEX, &collection.id, &collection)
-                .await?;
+                .create_document(COLLECTIONS_INDEX, &collection.id, &collection)
+                .await?
+            {
+                return Err(ApiError::Conflict(collection.id));
+            }
             Ok((
                 StatusCode::CREATED,
                 Json(collection_doc(&state, &collection, &catalog_id).await?),
@@ -1111,10 +1140,13 @@ pub async fn update_scoped_collection(
             collection.id
         )));
     }
-    state
+    if !state
         .store
-        .index_document(COLLECTIONS_INDEX, &collection_id, &collection)
-        .await?;
+        .replace_document(COLLECTIONS_INDEX, &collection_id, &collection)
+        .await?
+    {
+        return Err(ApiError::WriteConflict(collection_id));
+    }
     Ok(Json(
         collection_doc(&state, &collection, &catalog_id).await?,
     ))
@@ -1134,10 +1166,13 @@ pub async fn unlink_scoped_collection(
     if !parents.iter().any(|p| p == &catalog_id) || !is_collection {
         return Err(ApiError::NotFound(format!("{catalog_id}/{collection_id}")));
     }
-    state
+    if !state
         .store
         .unlink_and_adopt(&collection_id, &catalog_id)
-        .await?;
+        .await?
+    {
+        return Err(ApiError::WriteConflict(collection_id));
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1276,7 +1311,9 @@ pub async fn disband_catalog(
     // Safety Disband: Unlink direct children only and auto-adopt orphans to Root.
     let direct_children = state.store.get_children(&catalog_id).await?;
     for child in direct_children {
-        state.store.unlink_and_adopt(&child, &catalog_id).await?;
+        if !state.store.unlink_and_adopt(&child, &catalog_id).await? {
+            return Err(ApiError::WriteConflict(child));
+        }
     }
 
     // Deleting the node's doc detaches it from all parents (children are
@@ -1439,10 +1476,14 @@ pub async fn create_scoped_item(
 ) -> Result<impl IntoResponse, ApiError> {
     require_scoped_collection(&state, &catalog_id, &collection_id).await?;
     validate_item_collection(&mut item, &collection_id)?;
-    state
+    // Atomic create — 409 on repost, no get-then-write race
+    if !state
         .store
-        .index_document(ITEMS_INDEX, &item.id, &item)
-        .await?;
+        .create_document(ITEMS_INDEX, &item.id, &item)
+        .await?
+    {
+        return Err(ApiError::Conflict(item.id));
+    }
     Ok((
         StatusCode::CREATED,
         geo_json(item_doc(&state, &item, Some(&catalog_id))),
@@ -1456,10 +1497,13 @@ pub async fn update_scoped_item(
 ) -> Result<impl IntoResponse, ApiError> {
     require_scoped_collection(&state, &catalog_id, &collection_id).await?;
     validate_item_collection(&mut item, &collection_id)?;
-    state
+    if !state
         .store
-        .index_document(ITEMS_INDEX, &item_id, &item)
-        .await?;
+        .put_document(ITEMS_INDEX, &item_id, &item)
+        .await?
+    {
+        return Err(ApiError::WriteConflict(item_id));
+    }
     Ok(geo_json(item_doc(&state, &item, Some(&catalog_id))))
 }
 
@@ -1497,18 +1541,24 @@ pub async fn create_root_collection(
     {
         return Err(ApiError::Conflict(collection.id));
     }
-    state
+    if !state
         .store
         .set_parents(
             &collection.id,
             vec![ROOT_CATALOG_ID.to_string()],
             NodeKind::Collection,
         )
-        .await?;
-    state
+        .await?
+    {
+        return Err(ApiError::WriteConflict(collection.id));
+    }
+    if !state
         .store
-        .index_document(COLLECTIONS_INDEX, &collection.id, &collection)
-        .await?;
+        .create_document(COLLECTIONS_INDEX, &collection.id, &collection)
+        .await?
+    {
+        return Err(ApiError::Conflict(collection.id));
+    }
     Ok((
         StatusCode::CREATED,
         Json(global_collection_doc(&state, &collection.id).await?),
@@ -1536,10 +1586,13 @@ pub async fn update_root_collection(
         return Err(ApiError::NotFound(collection_id));
     }
     collection.links.clear();
-    state
+    if !state
         .store
-        .index_document(COLLECTIONS_INDEX, &collection_id, &collection)
-        .await?;
+        .replace_document(COLLECTIONS_INDEX, &collection_id, &collection)
+        .await?
+    {
+        return Err(ApiError::WriteConflict(collection_id));
+    }
     Ok(Json(global_collection_doc(&state, &collection.id).await?))
 }
 
@@ -1592,10 +1645,13 @@ pub async fn create_root_item(
     {
         return Err(ApiError::Conflict(item.id));
     }
-    state
+    if !state
         .store
-        .index_document(ITEMS_INDEX, &item.id, &item)
-        .await?;
+        .create_document(ITEMS_INDEX, &item.id, &item)
+        .await?
+    {
+        return Err(ApiError::Conflict(item.id));
+    }
     Ok((StatusCode::CREATED, geo_json(item_doc(&state, &item, None))))
 }
 
@@ -1622,10 +1678,13 @@ pub async fn update_root_item(
     match state.store.get_document(ITEMS_INDEX, &item_id).await? {
         Some(doc) if doc["collection"] == collection_id => {
             validate_item_collection(&mut item, &collection_id)?;
-            state
+            if !state
                 .store
-                .index_document(ITEMS_INDEX, &item_id, &item)
-                .await?;
+                .replace_document(ITEMS_INDEX, &item_id, &item)
+                .await?
+            {
+                return Err(ApiError::WriteConflict(item_id));
+            }
             Ok(geo_json(item_doc(&state, &item, None)))
         }
         _ => Err(ApiError::NotFound(item_id)),
@@ -1660,6 +1719,8 @@ pub enum ApiError {
     BadRequest(String),
     NotFound(String),
     Conflict(String),
+    /// Optimistic-concurrency retries exhausted — retry the request.
+    WriteConflict(String),
     Internal(String),
 }
 
@@ -1677,6 +1738,10 @@ impl IntoResponse for ApiError {
             ApiError::Conflict(id) => (
                 StatusCode::CONFLICT,
                 format!("Resource '{id}' already exists"),
+            ),
+            ApiError::WriteConflict(id) => (
+                StatusCode::CONFLICT,
+                format!("Resource '{id}' was modified concurrently — retry the request"),
             ),
             ApiError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };

@@ -5,7 +5,8 @@ use opensearch::{
         StatusCode, Url,
     },
     indices::{IndicesCreateParts, IndicesDeleteParts, IndicesExistsParts, IndicesPutMappingParts},
-    DeleteByQueryParts, DeleteParts, GetParts, IndexParts, MgetParts, OpenSearch, SearchParts,
+    CreateParts, DeleteByQueryParts, DeleteParts, GetParts, IndexParts, MgetParts, OpenSearch,
+    SearchParts,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -14,6 +15,25 @@ use stac_api::Search;
 use std::collections::{HashMap, HashSet};
 
 pub const ROOT_CATALOG_ID: &str = "root";
+
+/// Retries on optimistic-concurrency conflicts before giving up
+/// (callers map `false` to HTTP 409).
+const MAX_WRITE_RETRIES: usize = 5;
+
+/// OpenSearch `_seq_no`/`_primary_term` stamp for conditional writes.
+#[derive(Clone, Copy)]
+pub struct DocVersion {
+    pub seq_no: i64,
+    pub primary_term: i64,
+}
+
+/// Extract the version stamp from a `_doc` GET response body.
+fn doc_version(body: &Value) -> Option<DocVersion> {
+    Some(DocVersion {
+        seq_no: body["_seq_no"].as_i64()?,
+        primary_term: body["_primary_term"].as_i64()?,
+    })
+}
 
 /// Logical index names — `Store` prepends its index prefix
 /// (`{prefix}-{logical}`). The default `stac` prefix maps onto the
@@ -179,47 +199,79 @@ impl Store {
 
     /// Replace a node's parent set (Mode A create / full update).
     /// Orphan safety: an empty parent set is adopted by root.
+    /// Returns `false` when the write kept losing optimistic-concurrency
+    /// races — callers map that to a 409.
     pub async fn set_parents(
         &self,
         node_id: &str,
         parent_ids: Vec<String>,
         kind: NodeKind,
-    ) -> Result<(), opensearch::Error> {
+    ) -> Result<bool, opensearch::Error> {
         let mut parents = parent_ids;
         if parents.is_empty() {
             parents.push(ROOT_CATALOG_ID.to_string());
         }
-        self.put_node(node_id, &HierarchyNode { kind, parents })
-            .await
+        self.mutate_node(node_id, kind, move |node| {
+            node.kind = kind;
+            node.parents.clone_from(&parents);
+        })
+        .await
     }
 
     /// Add a single parent to a node (Mode B linking).
     /// Keeps the node's existing kind if it was already registered.
+    /// `false` = retries exhausted (concurrent mutations).
     pub async fn link(
         &self,
         child_id: &str,
         parent_id: &str,
         kind: NodeKind,
-    ) -> Result<(), opensearch::Error> {
-        let mut node = self.get_node(child_id).await?.unwrap_or(HierarchyNode {
-            kind,
-            parents: vec![ROOT_CATALOG_ID.to_string()],
-        });
-        apply_link(&mut node.parents, parent_id);
-        self.put_node(child_id, &node).await
+    ) -> Result<bool, opensearch::Error> {
+        self.mutate_node(child_id, kind, move |node| {
+            apply_link(&mut node.parents, parent_id)
+        })
+        .await
     }
 
     /// Unlink a child from a parent; adopts the child under root if orphaned.
+    /// `false` = retries exhausted (concurrent mutations).
     pub async fn unlink_and_adopt(
         &self,
         child_id: &str,
         parent_id: &str,
-    ) -> Result<(), opensearch::Error> {
-        if let Some(mut node) = self.get_node(child_id).await? {
-            apply_unlink(&mut node.parents, parent_id);
-            self.put_node(child_id, &node).await?;
+    ) -> Result<bool, opensearch::Error> {
+        self.mutate_node(child_id, NodeKind::Catalog, move |node| {
+            apply_unlink(&mut node.parents, parent_id)
+        })
+        .await
+    }
+
+    /// Read-modify-write a hierarchy node with optimistic concurrency:
+    /// the mutation is replayed on a fresh doc each attempt, so concurrent
+    /// edges merge instead of lost-updating. `false` = retries exhausted.
+    async fn mutate_node(
+        &self,
+        node_id: &str,
+        default_kind: NodeKind,
+        mutate: impl Fn(&mut HierarchyNode),
+    ) -> Result<bool, opensearch::Error> {
+        for _ in 0..MAX_WRITE_RETRIES {
+            let (mut node, version) =
+                self.get_node_versioned(node_id).await?.unwrap_or_else(|| {
+                    (
+                        HierarchyNode {
+                            kind: default_kind,
+                            parents: vec![ROOT_CATALOG_ID.to_string()],
+                        },
+                        None,
+                    )
+                });
+            mutate(&mut node);
+            if self.put_node_versioned(node_id, &node, version).await? {
+                return Ok(true);
+            }
         }
-        Ok(())
+        Ok(false)
     }
 
     /// Delete a node outright (disband). Since children are derived from
@@ -227,11 +279,16 @@ impl Store {
     /// Callers must unlink the node's own children first.
     pub async fn remove_node(&self, node_id: &str) -> Result<(), opensearch::Error> {
         let index = self.idx(HIERARCHY_INDEX);
-        self.client
+        let resp = self
+            .client
             .delete(DeleteParts::IndexId(&index, node_id))
             .refresh(opensearch::params::Refresh::WaitFor)
             .send()
             .await?;
+        // 404 on an absent node is fine; anything worse is not
+        if !resp.status_code().is_success() && resp.status_code() != StatusCode::NOT_FOUND {
+            resp.error_for_status_code()?;
+        }
         Ok(())
     }
 
@@ -388,6 +445,9 @@ impl Store {
 
     // --- STAC document storage ---
 
+    /// Unconditional index — for seed/tests only. Real write paths use
+    /// `create_document`/`put_document`/`replace_document` so conflicts
+    /// aren't silently lost.
     pub async fn index_document(
         &self,
         index: &str,
@@ -400,7 +460,8 @@ impl Store {
             .body(doc)
             .refresh(opensearch::params::Refresh::WaitFor)
             .send()
-            .await?;
+            .await?
+            .error_for_status_code()?;
         Ok(())
     }
 
@@ -409,6 +470,19 @@ impl Store {
         index: &str,
         id: &str,
     ) -> Result<Option<Value>, opensearch::Error> {
+        Ok(self
+            .get_document_versioned(index, id)
+            .await?
+            .map(|(doc, _)| doc))
+    }
+
+    /// Fetch a document with its `_seq_no`/`_primary_term` stamp —
+    /// required for conditional (`if_seq_no`) writes.
+    pub async fn get_document_versioned(
+        &self,
+        index: &str,
+        id: &str,
+    ) -> Result<Option<(Value, DocVersion)>, opensearch::Error> {
         let index = self.idx(index);
         let resp = self
             .client
@@ -418,18 +492,132 @@ impl Store {
         if resp.status_code() == StatusCode::NOT_FOUND {
             return Ok(None);
         }
+        resp.error_for_status_code_ref()?;
         let body = resp.json::<Value>().await?;
-        Ok(Some(body["_source"].clone()))
+        Ok(doc_version(&body).map(|v| (body["_source"].clone(), v)))
     }
 
-    pub async fn delete_document(&self, index: &str, id: &str) -> Result<(), opensearch::Error> {
+    /// Conditional write: fails (returns `false`) if the doc moved on
+    /// since `version` was read. Other failures surface as errors.
+    pub async fn index_document_versioned(
+        &self,
+        index: &str,
+        id: &str,
+        doc: impl Serialize,
+        version: DocVersion,
+    ) -> Result<bool, opensearch::Error> {
         let index = self.idx(index);
-        self.client
+        let resp = self
+            .client
+            .index(IndexParts::IndexId(&index, id))
+            .if_seq_no(version.seq_no)
+            .if_primary_term(version.primary_term)
+            .body(doc)
+            .refresh(opensearch::params::Refresh::WaitFor)
+            .send()
+            .await?;
+        Ok(match resp.status_code() {
+            StatusCode::CONFLICT => false,
+            s if s.is_success() => true,
+            _ => {
+                resp.error_for_status_code()?;
+                unreachable!()
+            }
+        })
+    }
+
+    /// Replace an existing document with bounded optimistic-concurrency
+    /// retries (PUT semantics — the body doesn't depend on the old doc,
+    /// so a retry just re-stamps the same write). `false` = retries
+    /// exhausted or the doc vanished mid-flight.
+    pub async fn replace_document(
+        &self,
+        index: &str,
+        id: &str,
+        doc: &(impl Serialize + Sync),
+    ) -> Result<bool, opensearch::Error> {
+        for _ in 0..MAX_WRITE_RETRIES {
+            let Some((_, version)) = self.get_document_versioned(index, id).await? else {
+                // Deleted between the caller's 404 check and now.
+                return Ok(false);
+            };
+            if self
+                .index_document_versioned(index, id, doc, version)
+                .await?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Upsert (PUT semantics that may create). Existing doc → conditional
+    /// write with retries; absent → `op_type=create`, and a raced create
+    /// re-reads and conditional-writes on the next iteration.
+    pub async fn put_document(
+        &self,
+        index: &str,
+        id: &str,
+        doc: &(impl Serialize + Sync),
+    ) -> Result<bool, opensearch::Error> {
+        for _ in 0..MAX_WRITE_RETRIES {
+            let applied = match self.get_document_versioned(index, id).await? {
+                Some((_, version)) => {
+                    self.index_document_versioned(index, id, doc, version)
+                        .await?
+                }
+                None => self.create_document(index, id, doc).await?,
+            };
+            if applied {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Create-if-absent (`op_type=create`). `false` = a doc with this id
+    /// exists — the atomic version of the callers' get-then-409 check.
+    pub async fn create_document(
+        &self,
+        index: &str,
+        id: &str,
+        doc: &(impl Serialize + Sync),
+    ) -> Result<bool, opensearch::Error> {
+        let index = self.idx(index);
+        let resp = self
+            .client
+            .create(CreateParts::IndexId(&index, id))
+            .body(doc)
+            .refresh(opensearch::params::Refresh::WaitFor)
+            .send()
+            .await?;
+        Ok(match resp.status_code() {
+            StatusCode::CONFLICT => false,
+            s if s.is_success() => true,
+            _ => {
+                resp.error_for_status_code()?;
+                unreachable!()
+            }
+        })
+    }
+
+    /// Delete a document. `false` = it was already gone (raced delete).
+    pub async fn delete_document(&self, index: &str, id: &str) -> Result<bool, opensearch::Error> {
+        let index = self.idx(index);
+        let resp = self
+            .client
             .delete(DeleteParts::IndexId(&index, id))
             .refresh(opensearch::params::Refresh::WaitFor)
             .send()
             .await?;
-        Ok(())
+        Ok(match resp.status_code() {
+            StatusCode::NOT_FOUND => false,
+            s if s.is_success() => true,
+            _ => {
+                resp.error_for_status_code()?;
+                unreachable!()
+            }
+        })
     }
 
     /// Delete all items belonging to a collection (collection teardown).
@@ -557,6 +745,16 @@ impl Store {
     // --- node doc helpers ---
 
     async fn get_node(&self, node_id: &str) -> Result<Option<HierarchyNode>, opensearch::Error> {
+        Ok(self
+            .get_node_versioned(node_id)
+            .await?
+            .map(|(node, _)| node))
+    }
+
+    async fn get_node_versioned(
+        &self,
+        node_id: &str,
+    ) -> Result<Option<(HierarchyNode, Option<DocVersion>)>, opensearch::Error> {
         let index = self.idx(HIERARCHY_INDEX);
         let resp = self
             .client
@@ -567,18 +765,49 @@ impl Store {
             return Ok(None);
         }
         let body = resp.json::<Value>().await?;
-        Ok(serde_json::from_value(body["_source"].clone()).ok())
+        Ok(serde_json::from_value(body["_source"].clone())
+            .ok()
+            .map(|node| (node, doc_version(&body))))
     }
 
-    async fn put_node(&self, node_id: &str, node: &HierarchyNode) -> Result<(), opensearch::Error> {
+    /// Optimistic-concurrency write. `None` version = create-if-absent
+    /// (`op_type=create`, conflicts if a node appeared meanwhile).
+    /// Returns `false` on a version conflict — retry with a fresh read.
+    async fn put_node_versioned(
+        &self,
+        node_id: &str,
+        node: &HierarchyNode,
+        version: Option<DocVersion>,
+    ) -> Result<bool, opensearch::Error> {
         let index = self.idx(HIERARCHY_INDEX);
-        self.client
-            .index(IndexParts::IndexId(&index, node_id))
-            .body(node)
-            .refresh(opensearch::params::Refresh::WaitFor)
-            .send()
-            .await?;
-        Ok(())
+        let resp = match version {
+            Some(v) => {
+                self.client
+                    .index(IndexParts::IndexId(&index, node_id))
+                    .if_seq_no(v.seq_no)
+                    .if_primary_term(v.primary_term)
+                    .body(node)
+                    .refresh(opensearch::params::Refresh::WaitFor)
+                    .send()
+                    .await?
+            }
+            None => {
+                self.client
+                    .create(CreateParts::IndexId(&index, node_id))
+                    .body(node)
+                    .refresh(opensearch::params::Refresh::WaitFor)
+                    .send()
+                    .await?
+            }
+        };
+        Ok(match resp.status_code() {
+            StatusCode::CONFLICT => false,
+            s if s.is_success() => true,
+            _ => {
+                resp.error_for_status_code()?;
+                unreachable!()
+            }
+        })
     }
 }
 

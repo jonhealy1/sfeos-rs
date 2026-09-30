@@ -80,6 +80,17 @@ pub async fn call(
     (status, json)
 }
 
+/// Owned-URI variant of `call` — use for futures held across `join!`s
+/// (borrowed `&format!` temporaries can't outlive the joined future).
+pub async fn call_owned(
+    app: &Router,
+    method: &str,
+    uri: String,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
+    call(app, method, &uri, body).await
+}
+
 use tower::ServiceExt;
 
 /// Equivalent of their `test_catalog.json` fixture (user links included —

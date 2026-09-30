@@ -30,16 +30,24 @@ When unset, only the read surface is mounted and the landing page `conformsTo` o
 
 ### Read surface — always mounted
 
+**Core STAC routes**
+
 | Method | Path | Supports |
 |---|---|---|
 | GET | `/` | Landing page (`conformsTo`, `child` links per root node, `search`/`data`/`conformance`/`service-desc` links) |
 | GET | `/conformance` | OGC conformance class URIs |
 | GET | `/api` | OpenAPI service description (`service-desc` link target) |
 | GET | `/sortables` | OGC Sortables schema for `sortby` discovery |
-| GET | `/collections` | `?limit=&token=` paging |
+| GET/POST | `/search` | Registry-wide item search (same handler as `/catalogs/search`). Filters: `collections`, `ids`, `bbox`, `intersects`, `datetime`, `sortby`, `limit`, `offset` → `next`/`prev` links |
+| GET | `/collections` | `?limit=&token=` paging — every collection in the registry |
 | GET | `/collections/{collection_id}` | Canonical links (`self`, `parent` per parent, `duplicate`) |
 | GET | `/collections/{collection_id}/items` | `?limit=&token=` paging; `application/geo+json`, item `self`/`parent`/`collection`/`root` links |
 | GET | `/collections/{collection_id}/items/{item_id}` | `application/geo+json` |
+
+**Multi-tenant catalogs routes**
+
+| Method | Path | Supports |
+|---|---|---|
 | GET | `/catalogs` | `?limit=&token=` paging (default 10) |
 | GET | `/catalogs/{catalog_id}` | Dynamic links (`parent` per parent, `children`, `data`, `search`) |
 | GET | `/catalogs/{catalog_id}/catalogs` | `?limit=&token=` paging |
@@ -49,13 +57,14 @@ When unset, only the read surface is mounted and the landing page `conformsTo` o
 | GET | `/catalogs/{catalog_id}/collections/{collection_id}` | Contextual `self`/`parent`, alt parents as `related`/`duplicate` |
 | GET | `/catalogs/{catalog_id}/collections/{collection_id}/items` | `?limit=&token=` paging; `application/geo+json`, scoped item links |
 | GET | `/catalogs/{catalog_id}/collections/{collection_id}/items/{item_id}` | `application/geo+json` |
-| GET/POST | `/search` | Registry-wide item search (same handler as `/catalogs/search`). Filters: `collections`, `ids`, `bbox`, `intersects`, `datetime`, `sortby`, `limit`, `offset` → `next`/`prev` links |
 | GET/POST | `/catalogs/search` | Whole-registry scope. Same filters as `/search` |
 | GET/POST | `/catalogs/{catalog_id}/search` | Same filters, intersected with the catalog's descendant collections |
 
 GET search takes `bbox`, `datetime`, `ids`, `collections`, `limit`, `sortby` (`+field`/`-field` shorthand) as query params; POST takes the full `Search` body (`intersects` included). `fields`, `query`, and CQL2 `filter` are parsed but not yet applied.
 
 ### Transactions — require `ENABLE_TRANSACTIONS_EXTENSIONS`
+
+All write routes are catalog-scoped (`/catalogs/...`); the core `/collections` surface stays read-only.
 
 | Method | Path | Supports |
 |---|---|---|
